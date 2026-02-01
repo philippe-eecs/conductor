@@ -210,8 +210,6 @@ struct ChatMessage: Identifiable, Codable, Equatable {
     }
 
     var formattedTime: String {
-        let formatter = DateFormatter()
-        formatter.timeStyle = .short
-        return formatter.string(from: timestamp)
+        SharedDateFormatters.shortTime.string(from: timestamp)
     }
 }

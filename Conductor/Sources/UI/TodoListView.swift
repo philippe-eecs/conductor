@@ -53,8 +53,12 @@ struct TodoListView: View {
     @State private var showNewListSheet = false
     @State private var showTaskDetail: TodoTask?
     @State private var isLoading = false
+    @State private var selectedTaskId: String?
+
+    @ObservedObject private var undoManager = TaskUndoManager.shared
 
     @FocusState private var isNewTaskFocused: Bool
+    @FocusState private var focusedTaskId: String?
 
     var body: some View {
         HSplitView {
@@ -67,6 +71,27 @@ struct TodoListView: View {
         }
         .task {
             await loadData()
+        }
+        .overlay {
+            Group {
+                // Cmd+N focuses quick-add input (so you can add tasks without reaching for the mouse).
+                Button("") {
+                    isNewTaskFocused = true
+                    focusedTaskId = nil
+                }
+                .keyboardShortcut("n", modifiers: [.command])
+
+                // Cmd+Z undo (task/list deletions).
+                Button("") {
+                    TaskUndoManager.shared.undo()
+                    Task { await loadData() }
+                }
+                .keyboardShortcut("z", modifiers: [.command])
+                .disabled(!undoManager.canUndo)
+            }
+            .opacity(0)
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
         }
         .sheet(isPresented: $showNewListSheet) {
             NewListSheet(onSave: { name, color, icon in
@@ -88,6 +113,9 @@ struct TodoListView: View {
                 },
                 onDelete: { taskId in
                     Task {
+                        if let task = (try? Database.shared.getTask(id: taskId)) ?? tasks.first(where: { $0.id == taskId }) {
+                            TaskUndoManager.shared.recordDeleteTask(task)
+                        }
                         try? Database.shared.deleteTask(id: taskId)
                         await loadData()
                     }
@@ -145,6 +173,8 @@ struct TodoListView: View {
                     .contextMenu {
                         Button("Delete List", role: .destructive) {
                             Task {
+                                let taskIds = ((try? Database.shared.getTasksForList(list.id, includeCompleted: true)) ?? []).map(\.id)
+                                TaskUndoManager.shared.recordDeleteList(list: list, taskIds: taskIds)
                                 try? Database.shared.deleteTaskList(id: list.id)
                                 if selectedUserList?.id == list.id {
                                     selectedUserList = nil
@@ -245,6 +275,16 @@ struct TodoListView: View {
             .onChange(of: showCompleted) { _, _ in
                 Task { await loadTasks() }
             }
+
+            Button {
+                TaskUndoManager.shared.undo()
+                Task { await loadData() }
+            } label: {
+                Image(systemName: "arrow.uturn.backward")
+            }
+            .buttonStyle(.borderless)
+            .help("Undo (⌘Z)")
+            .disabled(!undoManager.canUndo)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -255,12 +295,12 @@ struct TodoListView: View {
             LazyVStack(alignment: .leading, spacing: 0) {
                 if selectedSmartList == .all && grouping == .byTime {
                     // Group by time
-                    taskSection("Overdue", tasks: tasks.filter { $0.isOverdue })
-                    taskSection("Today", tasks: tasks.filter { $0.isDueToday && !$0.isOverdue })
-                    taskSection("Tomorrow", tasks: tasks.filter { $0.isDueTomorrow })
-                    taskSection("This Week", tasks: tasks.filter { $0.isDueThisWeek && !$0.isDueToday && !$0.isDueTomorrow && !$0.isOverdue })
-                    taskSection("Later", tasks: tasks.filter { !$0.isDueThisWeek && !$0.isOverdue && $0.dueDate != nil })
-                    taskSection("Someday", tasks: tasks.filter { $0.dueDate == nil })
+                    taskSection("Overdue", tasks: overdueTasks)
+                    taskSection("Today", tasks: todayTasks)
+                    taskSection("Tomorrow", tasks: tomorrowTasks)
+                    taskSection("This Week", tasks: thisWeekTasks)
+                    taskSection("Later", tasks: laterTasks)
+                    taskSection("Someday", tasks: somedayTasks)
                 } else if selectedSmartList == .all && grouping == .byPriority {
                     // Group by priority
                     taskSection("High Priority", tasks: tasks.filter { $0.priority == .high })
@@ -270,18 +310,31 @@ struct TodoListView: View {
                 } else {
                     // No grouping
                     ForEach(tasks) { task in
-                        TaskRow(task: task, onToggle: {
+                        TaskRow(task: task, isSelected: task.id == selectedTaskId, onToggle: {
                             Task {
                                 try? Database.shared.toggleTaskCompleted(id: task.id)
                                 await loadTasks()
                             }
                         }, onTap: {
+                            selectedTaskId = task.id
+                            focusedTaskId = task.id
                             showTaskDetail = task
                         })
+                        .focused($focusedTaskId, equals: task.id)
                     }
                 }
             }
             .padding(.vertical, 8)
+        }
+        .focusable(true)
+        .onTapGesture {
+            // Allow arrow-key navigation after clicking anywhere in the list.
+            if focusedTaskId == nil {
+                focusedTaskId = selectedTaskId
+            }
+        }
+        .onMoveCommand { direction in
+            moveTaskSelection(direction)
         }
     }
 
@@ -298,14 +351,17 @@ struct TodoListView: View {
                     .padding(.bottom, 4)
 
                 ForEach(tasks) { task in
-                    TaskRow(task: task, onToggle: {
+                    TaskRow(task: task, isSelected: task.id == selectedTaskId, onToggle: {
                         Task {
                             try? Database.shared.toggleTaskCompleted(id: task.id)
                             await loadTasks()
                         }
                     }, onTap: {
+                        selectedTaskId = task.id
+                        focusedTaskId = task.id
                         showTaskDetail = task
                     })
+                    .focused($focusedTaskId, equals: task.id)
                 }
             }
         }
@@ -386,6 +442,79 @@ struct TodoListView: View {
         } else if let userList = selectedUserList {
             tasks = (try? Database.shared.getTasksForList(userList.id, includeCompleted: showCompleted)) ?? []
         }
+
+        // Keep selection stable across reloads.
+        let navigable = navigableTasks
+        if let selectedTaskId, navigable.contains(where: { $0.id == selectedTaskId }) {
+            // keep
+        } else {
+            selectedTaskId = navigable.first?.id
+        }
+        if focusedTaskId == nil {
+            focusedTaskId = selectedTaskId
+        }
+    }
+
+    private var overdueTasks: [TodoTask] {
+        tasks.filter { $0.isOverdue }
+    }
+
+    private var todayTasks: [TodoTask] {
+        tasks.filter { $0.isDueToday && !$0.isOverdue }
+    }
+
+    private var tomorrowTasks: [TodoTask] {
+        tasks.filter { $0.isDueTomorrow }
+    }
+
+    private var thisWeekTasks: [TodoTask] {
+        tasks.filter { $0.isDueThisWeek && !$0.isDueToday && !$0.isDueTomorrow && !$0.isOverdue }
+    }
+
+    private var laterTasks: [TodoTask] {
+        tasks.filter { !$0.isDueThisWeek && !$0.isOverdue && $0.dueDate != nil }
+    }
+
+    private var somedayTasks: [TodoTask] {
+        tasks.filter { $0.dueDate == nil }
+    }
+
+    private var navigableTasks: [TodoTask] {
+        if selectedSmartList == .all && grouping == .byTime {
+            return overdueTasks + todayTasks + tomorrowTasks + thisWeekTasks + laterTasks + somedayTasks
+        }
+        if selectedSmartList == .all && grouping == .byPriority {
+            return tasks.filter { $0.priority == .high } +
+                tasks.filter { $0.priority == .medium } +
+                tasks.filter { $0.priority == .low } +
+                tasks.filter { $0.priority == .none }
+        }
+        return tasks
+    }
+
+    private func moveTaskSelection(_ direction: MoveCommandDirection) {
+        guard direction == .up || direction == .down else { return }
+        guard !isNewTaskFocused else { return }
+
+        let items = navigableTasks
+        guard !items.isEmpty else { return }
+
+        let currentId = selectedTaskId ?? items[0].id
+        let currentIndex = items.firstIndex(where: { $0.id == currentId }) ?? 0
+
+        let newIndex: Int
+        switch direction {
+        case .up:
+            newIndex = max(0, currentIndex - 1)
+        case .down:
+            newIndex = min(items.count - 1, currentIndex + 1)
+        default:
+            return
+        }
+
+        let newId = items[newIndex].id
+        selectedTaskId = newId
+        focusedTaskId = newId
     }
 
     private func addTask() {
@@ -501,6 +630,12 @@ struct SidebarRow: View {
         }
         .buttonStyle(.plain)
         .padding(.horizontal, 4)
+        .accessibilityLabel(sidebarAccessibilityLabel)
+    }
+
+    private var sidebarAccessibilityLabel: String {
+        let itemWord = count == 1 ? "item" : "items"
+        return "\(title), \(count) \(itemWord)"
     }
 }
 
@@ -508,6 +643,7 @@ struct SidebarRow: View {
 
 struct TaskRow: View {
     let task: TodoTask
+    let isSelected: Bool
     let onToggle: () -> Void
     let onTap: () -> Void
 
@@ -520,6 +656,7 @@ struct TaskRow: View {
                     .font(.title3)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(task.isCompleted ? "Completed" : "Not completed")
 
             // Content
             VStack(alignment: .leading, spacing: 2) {
@@ -558,8 +695,10 @@ struct TaskRow: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
+        .background(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
+        .accessibilityElement(children: .combine)
     }
 }
 

@@ -193,14 +193,12 @@ final class LocalRuleEngine {
     /// Get overdue reminders count
     func getOverdueCount(reminders: [EventKitManager.Reminder]) -> Int {
         let now = Date()
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateStyle = .medium
 
         return reminders.filter { reminder in
             guard !reminder.isCompleted,
                   let dueDateString = reminder.dueDate else { return false }
 
-            if let dueDate = dateFormatter.date(from: dueDateString) {
+            if let dueDate = SharedDateFormatters.mediumDateTime.date(from: dueDateString) {
                 return dueDate < now
             }
             return false
@@ -243,9 +241,7 @@ struct FocusGap {
     let durationMinutes: Int
 
     var formattedTimeRange: String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "h:mm a"
-        return "\(formatter.string(from: startTime)) - \(formatter.string(from: endTime))"
+        "\(SharedDateFormatters.time12Hour.string(from: startTime)) - \(SharedDateFormatters.time12Hour.string(from: endTime))"
     }
 
     var formattedDuration: String {

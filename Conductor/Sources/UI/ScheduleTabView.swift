@@ -47,6 +47,10 @@ struct ScheduleTabView: View {
                 }
             }
         }
+        .focusable(true)
+        .onMoveCommand { direction in
+            handleMoveCommand(direction)
+        }
         .task {
             await loadMonthEvents()
             if viewMode == .week {
@@ -75,6 +79,14 @@ struct ScheduleTabView: View {
                 onDismiss: { showDayDetail = false }
             )
         }
+        .overlay {
+            // Cmd+T jumps to today.
+            Button("") { jumpToToday() }
+                .keyboardShortcut("t", modifiers: [.command])
+                .opacity(0)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+        }
     }
 
     // MARK: - Header
@@ -86,6 +98,7 @@ struct ScheduleTabView: View {
                 Image(systemName: "chevron.left")
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Previous month")
 
             Text(monthYearString)
                 .font(.headline)
@@ -95,16 +108,13 @@ struct ScheduleTabView: View {
                 Image(systemName: "chevron.right")
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Next month")
 
             Spacer()
 
             // Today button
             Button("Today") {
-                currentMonth = Date()
-                selectedDate = Date()
-                if viewMode == .week {
-                    Task { await loadWeekEvents() }
-                }
+                jumpToToday()
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
@@ -291,27 +301,19 @@ struct ScheduleTabView: View {
     // MARK: - Helpers
 
     private var monthYearString: String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MMMM yyyy"
-        return formatter.string(from: currentMonth)
+        SharedDateFormatters.monthYear.string(from: currentMonth)
     }
 
     private var selectedDateString: String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "EEEE, MMMM d"
-        return formatter.string(from: selectedDate)
+        SharedDateFormatters.fullDateNoYear.string(from: selectedDate)
     }
 
     private func dayOfWeekString(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "EEE"
-        return formatter.string(from: date)
+        SharedDateFormatters.shortDayOfWeek.string(from: date)
     }
 
     private func dayNumberString(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "d"
-        return formatter.string(from: date)
+        SharedDateFormatters.dayNumber.string(from: date)
     }
 
     private func hourString(_ hour: Int) -> String {
@@ -390,6 +392,32 @@ struct ScheduleTabView: View {
         }
     }
 
+    private func jumpToToday() {
+        let today = Date()
+        selectedDate = today
+        currentMonth = today
+    }
+
+    private func handleMoveCommand(_ direction: MoveCommandDirection) {
+        let deltaDays: Int
+        switch direction {
+        case .left:
+            deltaDays = -1
+        case .right:
+            deltaDays = 1
+        case .up:
+            deltaDays = -7
+        case .down:
+            deltaDays = 7
+        default:
+            return
+        }
+
+        guard let newDate = calendar.date(byAdding: .day, value: deltaDays, to: selectedDate) else { return }
+        selectedDate = newDate
+        currentMonth = newDate
+    }
+
     private func loadMonthEvents() async {
         isLoading = true
         defer { isLoading = false }
@@ -457,6 +485,16 @@ struct DayCell: View {
             .cornerRadius(6)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityText)
+    }
+
+    private var accessibilityText: String {
+        let dateText = SharedDateFormatters.fullDate.string(from: date)
+        if events.isEmpty {
+            return "\(dateText), no events"
+        }
+        let eventWord = events.count == 1 ? "event" : "events"
+        return "\(dateText), \(events.count) \(eventWord)"
     }
 
     private var textColor: Color {
@@ -565,9 +603,7 @@ struct DayDetailView: View {
     }
 
     private var dateString: String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "EEEE, MMMM d, yyyy"
-        return formatter.string(from: date)
+        SharedDateFormatters.fullDate.string(from: date)
     }
 }
 

@@ -23,22 +23,16 @@ final class DailyPlanningService: ObservableObject {
     // MARK: - Date Helpers
 
     nonisolated static var todayDateString: String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.string(from: Date())
+        SharedDateFormatters.databaseDate.string(from: Date())
     }
 
     nonisolated static var tomorrowDateString: String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
         let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: Date())!
-        return formatter.string(from: tomorrow)
+        return SharedDateFormatters.databaseDate.string(from: tomorrow)
     }
 
     nonisolated static func dateString(for date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.string(from: date)
+        SharedDateFormatters.databaseDate.string(from: date)
     }
 
     // MARK: - Data Loading
@@ -72,11 +66,16 @@ final class DailyPlanningService: ObservableObject {
         let context = await buildPlanningContext()
         let prompt = buildMorningBriefPrompt(context: context)
 
+        let planningModel = await Task.detached(priority: .utility) {
+            (((try? Database.shared.getPreference(key: "claude_planning_model")) ?? nil) ?? "opus")
+        }.value
+
         let response = try await ClaudeService.shared.sendMessage(
             prompt,
             context: nil,  // We've built custom context
             history: [],
-            toolsEnabled: false
+            toolsEnabled: false,
+            modelOverride: planningModel
         )
 
         let brief = DailyBrief(
@@ -99,11 +98,16 @@ final class DailyPlanningService: ObservableObject {
         let context = await buildPlanningContext()
         let prompt = buildEveningBriefPrompt(context: context)
 
+        let planningModel = await Task.detached(priority: .utility) {
+            (((try? Database.shared.getPreference(key: "claude_planning_model")) ?? nil) ?? "opus")
+        }.value
+
         let response = try await ClaudeService.shared.sendMessage(
             prompt,
             context: nil,
             history: [],
-            toolsEnabled: false
+            toolsEnabled: false,
+            modelOverride: planningModel
         )
 
         let brief = DailyBrief(
@@ -125,11 +129,16 @@ final class DailyPlanningService: ObservableObject {
         let context = await buildWeeklyContext()
         let prompt = buildWeeklyReviewPrompt(context: context)
 
+        let planningModel = await Task.detached(priority: .utility) {
+            (((try? Database.shared.getPreference(key: "claude_planning_model")) ?? nil) ?? "opus")
+        }.value
+
         let response = try await ClaudeService.shared.sendMessage(
             prompt,
             context: nil,
             history: [],
-            toolsEnabled: false
+            toolsEnabled: false,
+            modelOverride: planningModel
         )
 
         let brief = DailyBrief(
@@ -151,11 +160,16 @@ final class DailyPlanningService: ObservableObject {
         let context = await buildMonthlyContext()
         let prompt = buildMonthlyReviewPrompt(context: context)
 
+        let planningModel = await Task.detached(priority: .utility) {
+            (((try? Database.shared.getPreference(key: "claude_planning_model")) ?? nil) ?? "opus")
+        }.value
+
         let response = try await ClaudeService.shared.sendMessage(
             prompt,
             context: nil,
             history: [],
-            toolsEnabled: false
+            toolsEnabled: false,
+            modelOverride: planningModel
         )
 
         let brief = DailyBrief(
@@ -445,9 +459,7 @@ final class DailyPlanningService: ObservableObject {
     }
 
     private func formattedDate(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "EEEE, MMMM d, yyyy"
-        return formatter.string(from: date)
+        SharedDateFormatters.fullDate.string(from: date)
     }
 
     // MARK: - Weekly Context
@@ -464,10 +476,8 @@ final class DailyPlanningService: ObservableObject {
         let upcomingEvents = await EventKitManager.shared.getUpcomingEvents(days: 7)
 
         // Calculate last week's stats
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "yyyy-MM-dd"
-        let startDateString = dateFormatter.string(from: lastWeekStart)
-        let endDateString = dateFormatter.string(from: lastWeekEnd)
+        let startDateString = SharedDateFormatters.databaseDate.string(from: lastWeekStart)
+        let endDateString = SharedDateFormatters.databaseDate.string(from: lastWeekEnd)
 
         let weeklyStats = calculateWeeklyStats(from: startDateString, to: endDateString)
 
@@ -495,14 +505,11 @@ final class DailyPlanningService: ObservableObject {
         var total = 0
 
         // Get goals for each day in the range
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "yyyy-MM-dd"
-
-        if let start = dateFormatter.date(from: startDate),
-           let end = dateFormatter.date(from: endDate) {
+        if let start = SharedDateFormatters.databaseDate.date(from: startDate),
+           let end = SharedDateFormatters.databaseDate.date(from: endDate) {
             var current = start
             while current <= end {
-                let dateString = dateFormatter.string(from: current)
+                let dateString = SharedDateFormatters.databaseDate.string(from: current)
                 if let goals = try? database.getGoalsForDate(dateString) {
                     total += goals.count
                     completed += goals.filter { $0.isCompleted }.count
@@ -515,9 +522,7 @@ final class DailyPlanningService: ObservableObject {
     }
 
     private func formatDayOfWeek(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "EEEE"
-        return formatter.string(from: date)
+        SharedDateFormatters.dayOfWeek.string(from: date)
     }
 
     private func buildWeeklyReviewPrompt(context: WeeklyContext) -> String {
@@ -586,11 +591,8 @@ final class DailyPlanningService: ObservableObject {
 
         // Get last 30 days stats
         let thirtyDaysAgo = calendar.date(byAdding: .day, value: -30, to: today)!
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "yyyy-MM-dd"
-
-        let startDateString = dateFormatter.string(from: thirtyDaysAgo)
-        let endDateString = dateFormatter.string(from: today)
+        let startDateString = SharedDateFormatters.databaseDate.string(from: thirtyDaysAgo)
+        let endDateString = SharedDateFormatters.databaseDate.string(from: today)
 
         // Calculate monthly stats
         let monthlyStats = calculateMonthlyStats(from: startDateString, to: endDateString)
@@ -620,14 +622,11 @@ final class DailyPlanningService: ObservableObject {
         var completed = 0
         var total = 0
 
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "yyyy-MM-dd"
-
-        if let start = dateFormatter.date(from: startDate),
-           let end = dateFormatter.date(from: endDate) {
+        if let start = SharedDateFormatters.databaseDate.date(from: startDate),
+           let end = SharedDateFormatters.databaseDate.date(from: endDate) {
             var current = start
             while current <= end {
-                let dateString = dateFormatter.string(from: current)
+                let dateString = SharedDateFormatters.databaseDate.string(from: current)
                 if let goals = try? database.getGoalsForDate(dateString) {
                     total += goals.count
                     completed += goals.filter { $0.isCompleted }.count

@@ -175,9 +175,7 @@ final class CostTracker: ObservableObject {
 
     private func sendBudgetAlert(type: String, budget: Double, spent: Double) {
         // Use ISO 8601 date format for stable, locale-independent keys
-        let dateFormatter = ISO8601DateFormatter()
-        dateFormatter.formatOptions = [.withFullDate]
-        let dateKey = dateFormatter.string(from: Date())
+        let dateKey = SharedDateFormatters.iso8601.string(from: Date())
 
         let alertKey = "budget_alert_\(type)_\(dateKey)"
 
@@ -214,13 +212,11 @@ final class CostTracker: ObservableObject {
     private func cleanupOldAlertKeys() {
         // Remove alert keys older than 7 days to prevent accumulation
         let calendar = Calendar.current
-        let dateFormatter = ISO8601DateFormatter()
-        dateFormatter.formatOptions = [.withFullDate]
 
         // Delete keys for days 8-30 ago (keeping only last 7 days)
         for dayOffset in 8...30 {
             if let date = calendar.date(byAdding: .day, value: -dayOffset, to: Date()) {
-                let dateKey = dateFormatter.string(from: date)
+                let dateKey = SharedDateFormatters.iso8601.string(from: date)
                 try? Database.shared.deletePreference(key: "budget_alert_daily_\(dateKey)")
                 try? Database.shared.deletePreference(key: "budget_alert_monthly_\(dateKey)")
             }

@@ -17,6 +17,14 @@ struct SettingsView: View {
     @State private var focusSuggestionsEnabled: Bool = true
     @State private var includeOverdueReminders: Bool = true
     @State private var autoRollIncomplete: Bool = false
+    @State private var checkinsEnabled: Bool = true
+    @State private var midmorningCheckinTime: Date = SettingsView.makeTimeDate(hour: 10, minute: 30)
+    @State private var afternoonCheckinTime: Date = SettingsView.makeTimeDate(hour: 13, minute: 30)
+    @State private var winddownCheckinTime: Date = SettingsView.makeTimeDate(hour: 16, minute: 30)
+
+    // Claude model preferences
+    @State private var chatModel: String = "sonnet"
+    @State private var planningModel: String = "opus"
 
     // Security & Permission preferences
     @State private var calendarReadEnabled: Bool = true
@@ -116,6 +124,22 @@ struct SettingsView: View {
         focusSuggestionsEnabled = (try? Database.shared.getPreference(key: "focus_suggestions_enabled")) != "false"
         includeOverdueReminders = (try? Database.shared.getPreference(key: "include_overdue_reminders")) != "false"
         autoRollIncomplete = (try? Database.shared.getPreference(key: "auto_roll_incomplete")) == "true"
+        checkinsEnabled = (try? Database.shared.getPreference(key: "checkins_enabled")) != "false"
+
+        chatModel = (((try? Database.shared.getPreference(key: "claude_chat_model")) ?? nil) ?? "sonnet")
+        planningModel = (((try? Database.shared.getPreference(key: "claude_planning_model")) ?? nil) ?? "opus")
+
+        let midmorningHour = Int((try? Database.shared.getPreference(key: "midmorning_checkin_hour")) ?? "10") ?? 10
+        let midmorningMinute = Int((try? Database.shared.getPreference(key: "midmorning_checkin_minute")) ?? "30") ?? 30
+        midmorningCheckinTime = Self.makeTimeDate(hour: midmorningHour, minute: midmorningMinute)
+
+        let afternoonHour = Int((try? Database.shared.getPreference(key: "afternoon_checkin_hour")) ?? "13") ?? 13
+        let afternoonMinute = Int((try? Database.shared.getPreference(key: "afternoon_checkin_minute")) ?? "30") ?? 30
+        afternoonCheckinTime = Self.makeTimeDate(hour: afternoonHour, minute: afternoonMinute)
+
+        let winddownHour = Int((try? Database.shared.getPreference(key: "winddown_checkin_hour")) ?? "16") ?? 16
+        let winddownMinute = Int((try? Database.shared.getPreference(key: "winddown_checkin_minute")) ?? "30") ?? 30
+        winddownCheckinTime = Self.makeTimeDate(hour: winddownHour, minute: winddownMinute)
 
         // Security preferences (default to safe values)
         calendarReadEnabled = (try? Database.shared.getPreference(key: "calendar_read_enabled")) != "false"
@@ -128,6 +152,16 @@ struct SettingsView: View {
 
     private func savePlanningPreference(key: String, value: String) {
         try? Database.shared.setPreference(key: key, value: value)
+    }
+
+    private static func makeTimeDate(hour: Int, minute: Int) -> Date {
+        Calendar.current.date(bySettingHour: hour, minute: minute, second: 0, of: Date()) ?? Date()
+    }
+
+    private func saveTimePreference(date: Date, hourKey: String, minuteKey: String) {
+        let components = Calendar.current.dateComponents([.hour, .minute], from: date)
+        savePlanningPreference(key: hourKey, value: String(components.hour ?? 0))
+        savePlanningPreference(key: minuteKey, value: String(components.minute ?? 0))
     }
 
     private func showStatus(_ message: String) {
@@ -188,6 +222,46 @@ struct SettingsView: View {
             Text("Conductor uses your Claude Code Max subscription. No separate API key required.")
                 .font(.caption)
                 .foregroundColor(.secondary)
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("Chat model")
+                        .font(.subheadline)
+                    Spacer()
+                    Picker("", selection: $chatModel) {
+                        Text("Sonnet").tag("sonnet")
+                        Text("Opus").tag("opus")
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(width: 140)
+                    .onChange(of: chatModel) { _, newValue in
+                        savePlanningPreference(key: "claude_chat_model", value: newValue)
+                    }
+                }
+
+                HStack {
+                    Text("Planning model")
+                        .font(.subheadline)
+                    Spacer()
+                    Picker("", selection: $planningModel) {
+                        Text("Opus").tag("opus")
+                        Text("Sonnet").tag("sonnet")
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(width: 140)
+                    .onChange(of: planningModel) { _, newValue in
+                        savePlanningPreference(key: "claude_planning_model", value: newValue)
+                    }
+                }
+
+                Text("If Claude Code changes model names, update these to match your CLI.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
         }
     }
 
@@ -494,6 +568,49 @@ struct SettingsView: View {
                         .frame(width: 120)
                         .onChange(of: eveningBriefHour) { _, newValue in
                             savePlanningPreference(key: "evening_brief_hour", value: String(newValue))
+                        }
+                    }
+
+                    Divider()
+
+                    Toggle("Enable check-ins", isOn: $checkinsEnabled)
+                        .font(.subheadline)
+                        .onChange(of: checkinsEnabled) { _, newValue in
+                            savePlanningPreference(key: "checkins_enabled", value: newValue ? "true" : "false")
+                        }
+
+                    if checkinsEnabled {
+                        HStack {
+                            Text("Mid-morning Check-in")
+                                .font(.subheadline)
+                            Spacer()
+                            DatePicker("", selection: $midmorningCheckinTime, displayedComponents: [.hourAndMinute])
+                                .labelsHidden()
+                                .onChange(of: midmorningCheckinTime) { _, newValue in
+                                    saveTimePreference(date: newValue, hourKey: "midmorning_checkin_hour", minuteKey: "midmorning_checkin_minute")
+                                }
+                        }
+
+                        HStack {
+                            Text("Afternoon Check-in")
+                                .font(.subheadline)
+                            Spacer()
+                            DatePicker("", selection: $afternoonCheckinTime, displayedComponents: [.hourAndMinute])
+                                .labelsHidden()
+                                .onChange(of: afternoonCheckinTime) { _, newValue in
+                                    saveTimePreference(date: newValue, hourKey: "afternoon_checkin_hour", minuteKey: "afternoon_checkin_minute")
+                                }
+                        }
+
+                        HStack {
+                            Text("Wind-down Check-in")
+                                .font(.subheadline)
+                            Spacer()
+                            DatePicker("", selection: $winddownCheckinTime, displayedComponents: [.hourAndMinute])
+                                .labelsHidden()
+                                .onChange(of: winddownCheckinTime) { _, newValue in
+                                    saveTimePreference(date: newValue, hourKey: "winddown_checkin_hour", minuteKey: "winddown_checkin_minute")
+                                }
                         }
                     }
 

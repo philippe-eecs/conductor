@@ -172,10 +172,12 @@ final class MailService {
         end tell
         """
 
-        guard let appleScript = NSAppleScript(source: script) else { return 0 }
-
         return await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
+                guard let appleScript = NSAppleScript(source: script) else {
+                    continuation.resume(returning: 0)
+                    return
+                }
                 var error: NSDictionary?
                 let result = appleScript.executeAndReturnError(&error)
 
@@ -215,12 +217,12 @@ final class MailService {
     // MARK: - Private
 
     private func executeMailQuery(script: String, mailbox: String) async -> [EmailSummary] {
-        guard let appleScript = NSAppleScript(source: script) else {
-            return []
-        }
-
         return await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
+                guard let appleScript = NSAppleScript(source: script) else {
+                    continuation.resume(returning: [])
+                    return
+                }
                 var error: NSDictionary?
                 let result = appleScript.executeAndReturnError(&error)
 

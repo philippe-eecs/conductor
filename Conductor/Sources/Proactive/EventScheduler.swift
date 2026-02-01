@@ -171,7 +171,7 @@ final class EventScheduler {
                 id: "morning_brief",
                 name: "Morning Brief",
                 schedule: .daily(hour: 8, minute: 0),
-                preferenceKey: "morning_brief_hour",
+                preferenceHourKey: "morning_brief_hour",
                 action: { await self.triggerMorningBrief() }
             ),
 
@@ -180,6 +180,8 @@ final class EventScheduler {
                 id: "midmorning_checkin",
                 name: "Mid-morning Check-in",
                 schedule: .daily(hour: 10, minute: 30),
+                preferenceHourKey: "midmorning_checkin_hour",
+                preferenceMinuteKey: "midmorning_checkin_minute",
                 action: { await self.triggerMidMorningCheckin() }
             ),
 
@@ -188,6 +190,8 @@ final class EventScheduler {
                 id: "afternoon_checkin",
                 name: "Afternoon Check-in",
                 schedule: .daily(hour: 13, minute: 30),
+                preferenceHourKey: "afternoon_checkin_hour",
+                preferenceMinuteKey: "afternoon_checkin_minute",
                 action: { await self.triggerAfternoonCheckin() }
             ),
 
@@ -196,6 +200,8 @@ final class EventScheduler {
                 id: "winddown_checkin",
                 name: "Wind-down Check-in",
                 schedule: .daily(hour: 16, minute: 30),
+                preferenceHourKey: "winddown_checkin_hour",
+                preferenceMinuteKey: "winddown_checkin_minute",
                 action: { await self.triggerWinddownCheckin() }
             ),
 
@@ -204,7 +210,7 @@ final class EventScheduler {
                 id: "evening_shutdown",
                 name: "Evening Shutdown",
                 schedule: .daily(hour: 18, minute: 0),
-                preferenceKey: "evening_brief_hour",
+                preferenceHourKey: "evening_brief_hour",
                 action: { await self.triggerEveningShutdown() }
             ),
 
@@ -585,9 +591,7 @@ final class EventScheduler {
     // MARK: - Helpers
 
     private func formatDate(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "h:mm a"
-        return formatter.string(from: date)
+        SharedDateFormatters.time12Hour.string(from: date)
     }
 }
 
@@ -611,27 +615,25 @@ struct ScheduledJob {
     let id: String
     let name: String
     let schedule: JobSchedule
-    var preferenceKey: String?
+    var preferenceHourKey: String?
+    var preferenceMinuteKey: String?
     let action: () async -> Void
 
-    func nextRunDate(after date: Date) -> Date? {
-        let calendar = Calendar.current
+    func nextRunDate(after date: Date, calendar: Calendar = .current, preferences: PreferenceReading = Database.shared) -> Date? {
 
         switch schedule {
         case .daily(let hour, let minute):
-            // Check preference for custom hour
-            let actualHour: Int
-            if let key = preferenceKey,
-               let pref = try? Database.shared.getPreference(key: key),
-               let h = Int(pref) {
-                actualHour = h
-            } else {
-                actualHour = hour
-            }
+            let actualHour: Int = preferenceHourKey
+                .flatMap { preferences.preferenceValue(for: $0) }
+                .flatMap(Int.init) ?? hour
+
+            let actualMinute: Int = preferenceMinuteKey
+                .flatMap { preferences.preferenceValue(for: $0) }
+                .flatMap(Int.init) ?? minute
 
             var components = calendar.dateComponents([.year, .month, .day], from: date)
             components.hour = actualHour
-            components.minute = minute
+            components.minute = actualMinute
             components.second = 0
 
             guard let todayRun = calendar.date(from: components) else { return nil }
@@ -698,9 +700,7 @@ struct SchedulerState {
         }
 
         var formattedTime: String {
-            let formatter = DateFormatter()
-            formatter.dateFormat = "h:mm a"
-            return formatter.string(from: time)
+            SharedDateFormatters.time12Hour.string(from: time)
         }
 
         var timeUntil: String {
@@ -723,16 +723,12 @@ struct SchedulerState {
 
         var formattedTime: String {
             guard let time = scheduledTime else { return "" }
-            let formatter = DateFormatter()
-            formatter.dateFormat = "h:mm a"
-            return formatter.string(from: time)
+            return SharedDateFormatters.time12Hour.string(from: time)
         }
 
         var formattedDate: String {
             guard let time = scheduledTime else { return "" }
-            let formatter = DateFormatter()
-            formatter.dateFormat = "EEE, MMM d"
-            return formatter.string(from: time)
+            return SharedDateFormatters.shortDayDate.string(from: time)
         }
     }
 
@@ -745,9 +741,7 @@ struct SchedulerState {
         let minutesUntilWarning: Int
 
         var formattedEventTime: String {
-            let formatter = DateFormatter()
-            formatter.dateFormat = "h:mm a"
-            return formatter.string(from: eventStart)
+            SharedDateFormatters.time12Hour.string(from: eventStart)
         }
     }
 }

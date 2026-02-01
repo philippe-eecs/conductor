@@ -178,9 +178,7 @@ final class EventKitManager: @unchecked Sendable {
             if isAllDay {
                 return "All day"
             }
-            let formatter = DateFormatter()
-            formatter.timeStyle = .short
-            return formatter.string(from: startDate)
+            return SharedDateFormatters.shortTime.string(from: startDate)
         }
 
         var duration: String {
@@ -332,14 +330,10 @@ final class EventKitManager: @unchecked Sendable {
                     }
 
                     let reminders = ekReminders.prefix(limit).map { reminder in
-                        let formatter = DateFormatter()
-                        formatter.dateStyle = .medium
-                        formatter.timeStyle = .short
-
-                        var dueDateStr: String?
-                        if let dueDate = reminder.dueDateComponents?.date {
-                            dueDateStr = formatter.string(from: dueDate)
-                        }
+                    var dueDateStr: String?
+                    if let dueDate = reminder.dueDateComponents?.date {
+                        dueDateStr = SharedDateFormatters.mediumDateTime.string(from: dueDate)
+                    }
 
                         return Reminder(
                             id: reminder.calendarItemIdentifier,

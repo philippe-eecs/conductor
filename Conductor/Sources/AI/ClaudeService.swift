@@ -1,5 +1,88 @@
 import Foundation
 
+// MARK: - Command Validation (Shared)
+
+enum CommandValidationResult {
+    case allowed(warning: String?)
+    case denied(reason: String)
+
+    var isAllowed: Bool {
+        if case .allowed = self { return true }
+        return false
+    }
+
+    var message: String {
+        switch self {
+        case .allowed(let warning):
+            return warning ?? "Command allowed"
+        case .denied(let reason):
+            return reason
+        }
+    }
+}
+
+enum CommandValidator {
+    static func validate(
+        command: String,
+        allowlistEnabled: Bool,
+        allowedCommands: Set<String>,
+        allowedGitSubcommands: Set<String>,
+        blockedCommands: Set<String>
+    ) -> CommandValidationResult {
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return .denied(reason: "Empty command")
+        }
+
+        let components = trimmed.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+        guard let baseCommand = components.first else {
+            return .denied(reason: "Invalid command format")
+        }
+
+        let commandName = (baseCommand as NSString).lastPathComponent
+
+        if blockedCommands.contains(commandName) {
+            return .denied(reason: "Command '\(commandName)' is blocked for security")
+        }
+
+        if containsShellInjection(trimmed) {
+            return .denied(reason: "Command contains potentially unsafe patterns")
+        }
+
+        guard allowlistEnabled else {
+            return .allowed(warning: "Command allowlist disabled - executing unrestricted")
+        }
+
+        if allowedCommands.contains(commandName) {
+            if commandName == "git" && components.count > 1 {
+                let gitSubcommand = components[1]
+                if allowedGitSubcommands.contains(gitSubcommand) {
+                    return .allowed(warning: nil)
+                } else {
+                    return .denied(reason: "Git subcommand '\(gitSubcommand)' is not in allowlist")
+                }
+            }
+            return .allowed(warning: nil)
+        }
+
+        return .denied(reason: "Command '\(commandName)' is not in allowlist")
+    }
+
+    static func containsShellInjection(_ command: String) -> Bool {
+        let dangerousPatterns = [
+            "$(", "`",           // Command substitution
+            "&&", "||", ";",     // Command chaining
+            "|",                 // Piping (could be used for exfiltration)
+            ">", ">>",           // Output redirection
+            "<",                 // Input redirection
+            "\\n", "\\r",        // Newline injection
+            "${",                // Variable expansion
+        ]
+
+        return dangerousPatterns.contains { command.contains($0) }
+    }
+}
+
 /// Service that interfaces with the Claude CLI (`claude` command) as a subprocess.
 /// Uses the user's existing Claude Code Max subscription instead of requiring API keys.
 ///
@@ -43,13 +126,21 @@ actor ClaudeService {
 
     private let subprocessRunner: any SubprocessRunning
     private let now: @Sendable () -> Date
+    private let claudeExecutableURLProvider: @Sendable () throws -> URL
 
     init(
         subprocessRunner: any SubprocessRunning = SystemSubprocessRunner(),
-        now: @escaping @Sendable () -> Date = { Date() }
+        now: @escaping @Sendable () -> Date = { Date() },
+        claudeExecutableURLProvider: @escaping @Sendable () throws -> URL = {
+            if let url = ExecutableResolver.resolve(name: "claude") {
+                return url
+            }
+            throw ClaudeError.cliNotFound
+        }
     ) {
         self.subprocessRunner = subprocessRunner
         self.now = now
+        self.claudeExecutableURLProvider = claudeExecutableURLProvider
     }
 
     // MARK: - Response Types
@@ -94,12 +185,16 @@ actor ClaudeService {
     ///   - context: Optional context data (calendar, reminders, etc.)
     ///   - history: Previous chat messages (used for building context, not sent directly)
     ///   - toolsEnabled: When true, Claude can use tools (with user approval). Default: false (safe mode)
+    ///   - modelOverride: Optional model name passed to the Claude CLI via `--model` (e.g. "sonnet", "opus").
     /// - Returns: The assistant's response
-    func sendMessage(_ userMessage: String, context: ContextData?, history: [ChatMessage], toolsEnabled: Bool = false) async throws -> ClaudeResponse {
+    func sendMessage(_ userMessage: String, context: ContextData?, history: [ChatMessage], toolsEnabled: Bool = false, modelOverride: String? = nil) async throws -> ClaudeResponse {
         // Build arguments for the claude CLI.
         // - Use --print for non-interactive mode.
         // - Pass the full prompt via stdin to avoid leaking content via argv.
-        var args = ["--print", "--input-format", "text", "--output-format", "json", "--model", model]
+        let trimmedOverride = modelOverride?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let chosenModel = (trimmedOverride?.isEmpty == false) ? trimmedOverride! : model
+
+        var args = ["--print", "--input-format", "text", "--output-format", "json", "--model", chosenModel]
 
         // Tools mode: disabled by default for safety, enabled allows Claude to execute commands
         // When enabled, Claude Code will prompt for approval on dangerous operations
@@ -162,7 +257,7 @@ actor ClaudeService {
     /// Gets Claude CLI version
     func getCLIVersion() async -> String? {
         do {
-            let claudeURL = try resolveClaudeExecutableURL()
+            let claudeURL = try claudeExecutableURLProvider()
             let result = try await subprocessRunner.run(
                 executableURL: claudeURL,
                 arguments: ["--version"],
@@ -186,101 +281,16 @@ actor ClaudeService {
     ///   - allowlistEnabled: Whether the command allowlist is enabled
     /// - Returns: A CommandValidationResult indicating if the command is allowed
     func validateCommand(_ command: String, allowlistEnabled: Bool) -> CommandValidationResult {
-        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            return .denied(reason: "Empty command")
-        }
-
-        // Parse the command to get the base command and arguments
-        let components = trimmed.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
-        guard let baseCommand = components.first else {
-            return .denied(reason: "Invalid command format")
-        }
-
-        // Extract just the command name (handle paths like /usr/bin/git)
-        let commandName = (baseCommand as NSString).lastPathComponent
-
-        // Always block dangerous commands regardless of allowlist setting
-        if Self.blockedCommands.contains(commandName) {
-            return .denied(reason: "Command '\(commandName)' is blocked for security")
-        }
-
-        // Check for shell injection patterns
-        if containsShellInjection(trimmed) {
-            return .denied(reason: "Command contains potentially unsafe patterns")
-        }
-
-        // If allowlist is disabled, allow (with warning logged)
-        guard allowlistEnabled else {
-            return .allowed(warning: "Command allowlist disabled - executing unrestricted")
-        }
-
-        // Check if command is in allowlist
-        if Self.allowedCommands.contains(commandName) {
-            // Special handling for git - check subcommand
-            if commandName == "git" && components.count > 1 {
-                let gitSubcommand = components[1]
-                if Self.allowedGitSubcommands.contains(gitSubcommand) {
-                    return .allowed(warning: nil)
-                } else {
-                    return .denied(reason: "Git subcommand '\(gitSubcommand)' is not in allowlist")
-                }
-            }
-            return .allowed(warning: nil)
-        }
-
-        return .denied(reason: "Command '\(commandName)' is not in allowlist")
-    }
-
-    /// Checks for common shell injection patterns
-    private func containsShellInjection(_ command: String) -> Bool {
-        let dangerousPatterns = [
-            "$(", "`",           // Command substitution
-            "&&", "||", ";",     // Command chaining
-            "|",                 // Piping (could be used for exfiltration)
-            ">", ">>",           // Output redirection
-            "<",                 // Input redirection
-            "\\n", "\\r",        // Newline injection
-            "${",                // Variable expansion that could be exploited
-        ]
-
-        for pattern in dangerousPatterns {
-            if command.contains(pattern) {
-                return true
-            }
-        }
-
-        return false
-    }
-
-    /// Result of command validation
-    enum CommandValidationResult {
-        case allowed(warning: String?)
-        case denied(reason: String)
-
-        var isAllowed: Bool {
-            if case .allowed = self { return true }
-            return false
-        }
-
-        var message: String {
-            switch self {
-            case .allowed(let warning):
-                return warning ?? "Command allowed"
-            case .denied(let reason):
-                return reason
-            }
-        }
+        CommandValidator.validate(
+            command: command,
+            allowlistEnabled: allowlistEnabled,
+            allowedCommands: Self.allowedCommands,
+            allowedGitSubcommands: Self.allowedGitSubcommands,
+            blockedCommands: Self.blockedCommands
+        )
     }
 
     // MARK: - Private Methods
-
-    private func resolveClaudeExecutableURL() throws -> URL {
-        if let url = ExecutableResolver.resolve(name: "claude") {
-            return url
-        }
-        throw ClaudeError.cliNotFound
-    }
 
     private func workingDirectoryURL() -> URL {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -322,7 +332,7 @@ actor ClaudeService {
 
     private func runClaudeCLI(_ arguments: [String], stdin: Data?) async throws -> SubprocessResult {
         do {
-            let claudeURL = try resolveClaudeExecutableURL()
+            let claudeURL = try claudeExecutableURLProvider()
             return try await subprocessRunner.run(
                 executableURL: claudeURL,
                 arguments: arguments,
@@ -465,9 +475,7 @@ actor ClaudeService {
     }
 
     private func formattedDateTime(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "EEEE, MMMM d, yyyy 'at' h:mm a"
-        return formatter.string(from: date)
+        SharedDateFormatters.fullDateTime.string(from: date)
     }
 }
 
@@ -478,50 +486,20 @@ actor ClaudeService {
 func validateCommandSecurity(_ command: String) -> (allowed: Bool, reason: String) {
     let allowlistEnabled = (try? Database.shared.getPreference(key: "command_allowlist_enabled")) != "false"
 
-    let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else {
-        return (false, "Empty command")
+    let result = CommandValidator.validate(
+        command: command,
+        allowlistEnabled: allowlistEnabled,
+        allowedCommands: ClaudeService.allowedCommands,
+        allowedGitSubcommands: ClaudeService.allowedGitSubcommands,
+        blockedCommands: ClaudeService.blockedCommands
+    )
+
+    switch result {
+    case .allowed(let warning):
+        return (true, warning ?? "Allowed")
+    case .denied(let reason):
+        return (false, reason)
     }
-
-    let components = trimmed.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
-    guard let baseCommand = components.first else {
-        return (false, "Invalid command format")
-    }
-
-    let commandName = (baseCommand as NSString).lastPathComponent
-
-    // Always block dangerous commands
-    if ClaudeService.blockedCommands.contains(commandName) {
-        return (false, "Command '\(commandName)' is blocked for security")
-    }
-
-    // Check for shell injection patterns
-    let dangerousPatterns = ["$(", "`", "&&", "||", ";", "|", ">", ">>", "<", "${"]
-    for pattern in dangerousPatterns {
-        if trimmed.contains(pattern) {
-            return (false, "Command contains potentially unsafe patterns")
-        }
-    }
-
-    // If allowlist is disabled, allow
-    guard allowlistEnabled else {
-        return (true, "Command allowlist disabled")
-    }
-
-    // Check if command is in allowlist
-    if ClaudeService.allowedCommands.contains(commandName) {
-        if commandName == "git" && components.count > 1 {
-            let gitSubcommand = components[1]
-            if ClaudeService.allowedGitSubcommands.contains(gitSubcommand) {
-                return (true, "Allowed")
-            } else {
-                return (false, "Git subcommand '\(gitSubcommand)' is not in allowlist")
-            }
-        }
-        return (true, "Allowed")
-    }
-
-    return (false, "Command '\(commandName)' is not in allowlist")
 }
 
 // MARK: - Errors

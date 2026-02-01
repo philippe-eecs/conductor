@@ -327,9 +327,7 @@ struct DailyPlanningView: View {
     // MARK: - Computed Properties
 
     private var formattedDate: String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "EEEE, MMMM d"
-        return formatter.string(from: Date())
+        SharedDateFormatters.fullDateNoYear.string(from: Date())
     }
 
     private var greeting: String {
@@ -840,10 +838,8 @@ struct WeeklyReviewView: View {
         let calendar = Calendar.current
         let today = Date()
         let weekStart = calendar.date(from: calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: today))!
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MMM d"
-        let startStr = formatter.string(from: weekStart)
-        let endStr = formatter.string(from: today)
+        let startStr = SharedDateFormatters.shortMonthDay.string(from: weekStart)
+        let endStr = SharedDateFormatters.shortMonthDay.string(from: today)
         return "\(startStr) - \(endStr)"
     }
 
@@ -1034,9 +1030,7 @@ struct MonthlyReviewView: View {
     }
 
     private var currentMonth: String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MMMM yyyy"
-        return formatter.string(from: Date())
+        SharedDateFormatters.monthYear.string(from: Date())
     }
 
     private var monthlyStatsSection: some View {

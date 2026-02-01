@@ -267,19 +267,14 @@ struct ActivityDateGroup: Identifiable {
     let entries: [ActivityLogEntry]
 
     var isToday: Bool {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        return date == formatter.string(from: Date())
+        date == SharedDateFormatters.databaseDate.string(from: Date())
     }
 }
 
 extension Array where Element == ActivityLogEntry {
     func groupedByDate() -> [ActivityDateGroup] {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-
         let grouped = Dictionary(grouping: self) { entry in
-            formatter.string(from: entry.timestamp)
+            SharedDateFormatters.databaseDate.string(from: entry.timestamp)
         }
 
         return grouped.map { (date, entries) in

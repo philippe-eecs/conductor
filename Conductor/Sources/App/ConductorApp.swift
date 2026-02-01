@@ -309,7 +309,17 @@ class AppState: ObservableObject {
             // Log context usage
             logContextUsage(context)
 
-            let response = try await claudeService.sendMessage(content, context: context, history: messages, toolsEnabled: toolsEnabled)
+            let chatModel = await Task.detached(priority: .utility) {
+                (((try? Database.shared.getPreference(key: "claude_chat_model")) ?? nil) ?? "sonnet")
+            }.value
+
+            let response = try await claudeService.sendMessage(
+                content,
+                context: context,
+                history: messages,
+                toolsEnabled: toolsEnabled,
+                modelOverride: chatModel
+            )
 
             // Create assistant message with context metadata
             let assistantMessage = ChatMessage(
@@ -458,7 +468,7 @@ class AppState: ObservableObject {
     func logSecurityEvent(_ action: String, allowed: Bool, details: [String: String] = [:]) {
         var metadata = details
         metadata["Allowed"] = allowed ? "Yes" : "No"
-        metadata["Time"] = ISO8601DateFormatter().string(from: Date())
+        metadata["Time"] = SharedDateFormatters.iso8601.string(from: Date())
 
         let message = allowed ? "Allowed: \(action)" : "Blocked: \(action)"
         logActivity(.security, message, metadata: metadata)
@@ -513,8 +523,6 @@ struct ActivityLogEntry: Identifiable {
     }
 
     var formattedTime: String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm:ss"
-        return formatter.string(from: timestamp)
+        SharedDateFormatters.time24HourWithSeconds.string(from: timestamp)
     }
 }

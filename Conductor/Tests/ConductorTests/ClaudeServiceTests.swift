@@ -40,7 +40,11 @@ final class ClaudeServiceTests: XCTestCase {
         let json = #"{"result":"OK","total_cost_usd":0.12,"session_id":"sess_1","is_error":false}"#
         let runner = StubSubprocessRunner(nextResult: SubprocessResult(exitCode: 0, stdout: json, stderr: ""))
         let fixedNow = Date(timeIntervalSince1970: 1_700_000_000)
-        let service = ClaudeService(subprocessRunner: runner, now: { fixedNow })
+        let service = ClaudeService(
+            subprocessRunner: runner,
+            now: { fixedNow },
+            claudeExecutableURLProvider: { URL(fileURLWithPath: "/usr/bin/claude") }
+        )
 
         let response1 = try await service.sendMessage("Hello", context: nil, history: [])
         XCTAssertEqual(response1.result, "OK")
@@ -86,7 +90,11 @@ final class ClaudeServiceTests: XCTestCase {
         let json = #"{"result":"OK","total_cost_usd":0.01,"session_id":"sess_1","is_error":false}"#
         let runner = StubSubprocessRunner(nextResult: SubprocessResult(exitCode: 0, stdout: json, stderr: ""))
         let fixedNow = Date(timeIntervalSince1970: 1_700_000_000)
-        let service = ClaudeService(subprocessRunner: runner, now: { fixedNow })
+        let service = ClaudeService(
+            subprocessRunner: runner,
+            now: { fixedNow },
+            claudeExecutableURLProvider: { URL(fileURLWithPath: "/usr/bin/claude") }
+        )
 
         var context = ContextData()
         context.todayEvents = [
@@ -112,7 +120,11 @@ final class ClaudeServiceTests: XCTestCase {
         let json = #"{"result":"OK","total_cost_usd":0.01,"session_id":"sess_1","is_error":false}"#
         let runner = StubSubprocessRunner(nextResult: SubprocessResult(exitCode: 0, stdout: json, stderr: ""))
         let fixedNow = Date(timeIntervalSince1970: 1_700_000_000)
-        let service = ClaudeService(subprocessRunner: runner, now: { fixedNow })
+        let service = ClaudeService(
+            subprocessRunner: runner,
+            now: { fixedNow },
+            claudeExecutableURLProvider: { URL(fileURLWithPath: "/usr/bin/claude") }
+        )
 
         var context = ContextData()
         context.todayEvents = []
@@ -126,5 +138,45 @@ final class ClaudeServiceTests: XCTestCase {
         XCTAssertTrue(stdin.contains("- Calendar: No events today ✓"))
         XCTAssertFalse(stdin.contains("- Calendar: Not connected"))
         XCTAssertFalse(stdin.contains("## Today's Calendar:"))
+    }
+
+    func test_sendMessage_defaultsToSonnetModel() async throws {
+        let json = #"{"result":"OK","total_cost_usd":0.01,"session_id":"sess_1","is_error":false}"#
+        let runner = StubSubprocessRunner(nextResult: SubprocessResult(exitCode: 0, stdout: json, stderr: ""))
+        let fixedNow = Date(timeIntervalSince1970: 1_700_000_000)
+        let service = ClaudeService(
+            subprocessRunner: runner,
+            now: { fixedNow },
+            claudeExecutableURLProvider: { URL(fileURLWithPath: "/usr/bin/claude") }
+        )
+
+        _ = try await service.sendMessage("Hello", context: nil, history: [])
+        let invocation = await runner.invocations.first
+        let args = invocation?.arguments ?? []
+
+        guard let modelIndex = args.firstIndex(of: "--model"), modelIndex + 1 < args.count else {
+            return XCTFail("Expected --model argument")
+        }
+        XCTAssertEqual(args[modelIndex + 1], "sonnet")
+    }
+
+    func test_sendMessage_canOverrideModelToOpus() async throws {
+        let json = #"{"result":"OK","total_cost_usd":0.01,"session_id":"sess_1","is_error":false}"#
+        let runner = StubSubprocessRunner(nextResult: SubprocessResult(exitCode: 0, stdout: json, stderr: ""))
+        let fixedNow = Date(timeIntervalSince1970: 1_700_000_000)
+        let service = ClaudeService(
+            subprocessRunner: runner,
+            now: { fixedNow },
+            claudeExecutableURLProvider: { URL(fileURLWithPath: "/usr/bin/claude") }
+        )
+
+        _ = try await service.sendMessage("Hello", context: nil, history: [], toolsEnabled: false, modelOverride: "opus")
+        let invocation = await runner.invocations.first
+        let args = invocation?.arguments ?? []
+
+        guard let modelIndex = args.firstIndex(of: "--model"), modelIndex + 1 < args.count else {
+            return XCTFail("Expected --model argument")
+        }
+        XCTAssertEqual(args[modelIndex + 1], "opus")
     }
 }
