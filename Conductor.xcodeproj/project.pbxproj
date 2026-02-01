@@ -1,0 +1,456 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		1100000000000001 /* ConductorApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2200000000000001 /* ConductorApp.swift */; };
+		1100000000000002 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2200000000000002 /* AppDelegate.swift */; };
+		1100000000000003 /* ConductorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2200000000000003 /* ConductorView.swift */; };
+		1100000000000004 /* MessageBubbleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2200000000000004 /* MessageBubbleView.swift */; };
+		1100000000000005 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2200000000000005 /* SettingsView.swift */; };
+		1100000000000007 /* ClaudeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2200000000000007 /* ClaudeService.swift */; };
+		1100000000000008 /* GeminiService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2200000000000008 /* GeminiService.swift */; };
+		1100000000000009 /* Database.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2200000000000009 /* Database.swift */; };
+		110000000000000A /* EventKitManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 220000000000000A /* EventKitManager.swift */; };
+		110000000000000B /* ContextBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 220000000000000B /* ContextBuilder.swift */; };
+		110000000000000C /* ProactiveEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 220000000000000C /* ProactiveEngine.swift */; };
+		110000000000000D /* LocalRuleEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 220000000000000D /* LocalRuleEngine.swift */; };
+		110000000000000E /* FatigueManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 220000000000000E /* FatigueManager.swift */; };
+		110000000000000F /* OrchestraInvoker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 220000000000000F /* OrchestraInvoker.swift */; };
+		1100000000000011 /* SQLite in Frameworks */ = {isa = PBXBuildFile; productRef = 4400000000000002 /* SQLite */; };
+		1100000000000012 /* CostTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2200000000000012 /* CostTracker.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		2200000000000001 /* ConductorApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConductorApp.swift; sourceTree = "<group>"; };
+		2200000000000002 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		2200000000000003 /* ConductorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConductorView.swift; sourceTree = "<group>"; };
+		2200000000000004 /* MessageBubbleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageBubbleView.swift; sourceTree = "<group>"; };
+		2200000000000005 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		2200000000000007 /* ClaudeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeService.swift; sourceTree = "<group>"; };
+		2200000000000008 /* GeminiService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeminiService.swift; sourceTree = "<group>"; };
+		2200000000000009 /* Database.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Database.swift; sourceTree = "<group>"; };
+		220000000000000A /* EventKitManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventKitManager.swift; sourceTree = "<group>"; };
+		220000000000000B /* ContextBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextBuilder.swift; sourceTree = "<group>"; };
+		220000000000000C /* ProactiveEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProactiveEngine.swift; sourceTree = "<group>"; };
+		220000000000000D /* LocalRuleEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalRuleEngine.swift; sourceTree = "<group>"; };
+		220000000000000E /* FatigueManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FatigueManager.swift; sourceTree = "<group>"; };
+		220000000000000F /* OrchestraInvoker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrchestraInvoker.swift; sourceTree = "<group>"; };
+		2200000000000010 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		2200000000000011 /* Conductor.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Conductor.entitlements; sourceTree = "<group>"; };
+		2200000000000012 /* CostTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CostTracker.swift; sourceTree = "<group>"; };
+		3300000000000001 /* Conductor.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Conductor.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		5500000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1100000000000011 /* SQLite in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		6600000000000001 = {
+			isa = PBXGroup;
+			children = (
+				6600000000000002 /* Conductor */,
+				6600000000000009 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		6600000000000002 /* Conductor */ = {
+			isa = PBXGroup;
+			children = (
+				6600000000000003 /* App */,
+				6600000000000004 /* UI */,
+				6600000000000006 /* Data */,
+				6600000000000007 /* Context */,
+				6600000000000008 /* Proactive */,
+				660000000000000A /* AI */,
+				660000000000000B /* Tools */,
+				2200000000000010 /* Info.plist */,
+				2200000000000011 /* Conductor.entitlements */,
+			);
+			path = "Conductor/Sources";
+			sourceTree = "<group>";
+		};
+		6600000000000003 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				2200000000000001 /* ConductorApp.swift */,
+				2200000000000002 /* AppDelegate.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		6600000000000004 /* UI */ = {
+			isa = PBXGroup;
+			children = (
+				2200000000000003 /* ConductorView.swift */,
+				2200000000000004 /* MessageBubbleView.swift */,
+				2200000000000005 /* SettingsView.swift */,
+			);
+			path = UI;
+			sourceTree = "<group>";
+		};
+		6600000000000006 /* Data */ = {
+			isa = PBXGroup;
+			children = (
+				2200000000000009 /* Database.swift */,
+			);
+			path = Data;
+			sourceTree = "<group>";
+		};
+		6600000000000007 /* Context */ = {
+			isa = PBXGroup;
+			children = (
+				220000000000000A /* EventKitManager.swift */,
+				220000000000000B /* ContextBuilder.swift */,
+			);
+			path = Context;
+			sourceTree = "<group>";
+		};
+		6600000000000008 /* Proactive */ = {
+			isa = PBXGroup;
+			children = (
+				220000000000000C /* ProactiveEngine.swift */,
+				220000000000000D /* LocalRuleEngine.swift */,
+				220000000000000E /* FatigueManager.swift */,
+			);
+			path = Proactive;
+			sourceTree = "<group>";
+		};
+		6600000000000009 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				3300000000000001 /* Conductor.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		660000000000000A /* AI */ = {
+			isa = PBXGroup;
+			children = (
+				2200000000000007 /* ClaudeService.swift */,
+				2200000000000008 /* GeminiService.swift */,
+				2200000000000012 /* CostTracker.swift */,
+			);
+			path = AI;
+			sourceTree = "<group>";
+		};
+		660000000000000B /* Tools */ = {
+			isa = PBXGroup;
+			children = (
+				220000000000000F /* OrchestraInvoker.swift */,
+			);
+			path = Tools;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		7700000000000001 /* Conductor */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 8800000000000001 /* Build configuration list for PBXNativeTarget "Conductor" */;
+			buildPhases = (
+				7700000000000002 /* Sources */,
+				5500000000000001 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Conductor;
+			packageProductDependencies = (
+				4400000000000002 /* SQLite */,
+			);
+			productName = Conductor;
+			productReference = 3300000000000001 /* Conductor.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		9900000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					7700000000000001 = {
+						CreatedOnToolsVersion = 15.0;
+					};
+				};
+			};
+			buildConfigurationList = 8800000000000002 /* Build configuration list for PBXProject "Conductor" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 6600000000000001;
+			packageReferences = (
+				4400000000000004 /* XCRemoteSwiftPackageReference "SQLite.swift" */,
+			);
+			productRefGroup = 6600000000000009 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				7700000000000001 /* Conductor */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		7700000000000002 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1100000000000001 /* ConductorApp.swift in Sources */,
+				1100000000000002 /* AppDelegate.swift in Sources */,
+				1100000000000003 /* ConductorView.swift in Sources */,
+				1100000000000004 /* MessageBubbleView.swift in Sources */,
+				1100000000000005 /* SettingsView.swift in Sources */,
+				1100000000000007 /* ClaudeService.swift in Sources */,
+				1100000000000008 /* GeminiService.swift in Sources */,
+				1100000000000009 /* Database.swift in Sources */,
+				110000000000000A /* EventKitManager.swift in Sources */,
+				110000000000000B /* ContextBuilder.swift in Sources */,
+				110000000000000C /* ProactiveEngine.swift in Sources */,
+				110000000000000D /* LocalRuleEngine.swift in Sources */,
+				110000000000000E /* FatigueManager.swift in Sources */,
+				110000000000000F /* OrchestraInvoker.swift in Sources */,
+				1100000000000012 /* CostTracker.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		AA00000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		AA00000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		AA00000000000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = "Conductor/Sources/Conductor.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "Conductor/Sources/Info.plist";
+				INFOPLIST_KEY_LSUIElement = YES;
+				INFOPLIST_KEY_NSCalendarsUsageDescription = "Conductor needs access to your calendar to show your schedule and help you manage your time.";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSRemindersUsageDescription = "Conductor needs access to your reminders to help you track tasks and create new reminders.";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.conductor.app;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		AA00000000000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = "Conductor/Sources/Conductor.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "Conductor/Sources/Info.plist";
+				INFOPLIST_KEY_LSUIElement = YES;
+				INFOPLIST_KEY_NSCalendarsUsageDescription = "Conductor needs access to your calendar to show your schedule and help you manage your time.";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSRemindersUsageDescription = "Conductor needs access to your reminders to help you track tasks and create new reminders.";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.conductor.app;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		8800000000000001 /* Build configuration list for PBXNativeTarget "Conductor" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA00000000000003 /* Debug */,
+				AA00000000000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		8800000000000002 /* Build configuration list for PBXProject "Conductor" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA00000000000001 /* Debug */,
+				AA00000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		4400000000000004 /* XCRemoteSwiftPackageReference "SQLite.swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/stephencelis/SQLite.swift.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.15.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		4400000000000002 /* SQLite */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4400000000000004 /* XCRemoteSwiftPackageReference "SQLite.swift" */;
+			productName = SQLite;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 9900000000000001 /* Project object */;
+}

@@ -1,0 +1,25 @@
+# Build artifacts
+**/.build/
+**/DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/
+
+# macOS
+.DS_Store
+*.swp
+*~
+
+# Xcode
+xcuserdata/
+*.xccheckout
+*.xcscmblueprint
+
+# Swift Package Manager
+**/.swiftpm/
+**/Package.resolved
+
+# App data
+*.db
+
+# Checkouts (dependencies)
+**/checkouts/
