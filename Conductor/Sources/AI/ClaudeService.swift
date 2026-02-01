@@ -13,7 +13,16 @@ actor ClaudeService {
     /// Model to use for requests
     private var model: String = "sonnet"
 
-    private init() {}
+    private let subprocessRunner: any SubprocessRunning
+    private let now: @Sendable () -> Date
+
+    init(
+        subprocessRunner: any SubprocessRunning = SystemSubprocessRunner(),
+        now: @escaping @Sendable () -> Date = { Date() }
+    ) {
+        self.subprocessRunner = subprocessRunner
+        self.now = now
+    }
 
     // MARK: - Response Types
 
@@ -58,27 +67,30 @@ actor ClaudeService {
     ///   - history: Previous chat messages (used for building context, not sent directly)
     /// - Returns: The assistant's response
     func sendMessage(_ userMessage: String, context: ContextData?, history: [ChatMessage]) async throws -> ClaudeResponse {
-        // Build the system prompt with context
-        let systemPrompt = buildSystemPrompt(context: context)
-
-        // Build arguments for the claude CLI
-        // Note: We pass prompts via stdin, not argv, for security
-        var args = ["--output-format", "stream-json", "--model", model]
+        // Build arguments for the claude CLI.
+        // - Use --print for non-interactive mode.
+        // - Pass the full prompt via stdin to avoid leaking content via argv.
+        // - Disable tools by default for safety (no file edits / shell commands).
+        var args = ["--print", "--input-format", "text", "--output-format", "json", "--model", model, "--tools", ""]
 
         // Continue session if we have one
         if let sessionId = currentSessionId {
             args += ["--resume", sessionId]
         }
 
-        // Run the claude CLI with user message via stdin (more secure than argv)
-        let (output, exitCode) = try await runClaudeCLI(args, stdin: userMessage, systemPrompt: systemPrompt)
+        let fullPrompt = buildPrompt(userMessage: userMessage, context: context, history: history)
+        let result = try await runClaudeCLI(args, stdin: (fullPrompt + "\n").data(using: .utf8))
 
-        guard exitCode == 0 else {
-            throw ClaudeError.cliError("Claude CLI exited with code \(exitCode): \(output)")
+        guard result.exitCode == 0 else {
+            let message = [result.stderr, result.stdout]
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .first { !$0.isEmpty } ?? "Unknown error"
+            throw ClaudeError.cliError("Claude CLI exited with code \(result.exitCode): \(message)")
         }
 
         // Parse the JSON response
-        let response = try parseResponse(output)
+        let output = result.stdout.isEmpty ? result.stderr : result.stdout
+        let response = try OutputParser.parse(output)
 
         // Check for error response
         if response.is_error == true {
@@ -88,15 +100,6 @@ actor ClaudeService {
         // Save session for continuity
         if let sessionId = response.sessionId {
             currentSessionId = sessionId
-            try? Database.shared.saveSession(id: sessionId, title: extractTitle(from: userMessage))
-            // Associate any messages that were saved before we had a session ID
-            try? Database.shared.associateOrphanedMessages(withSession: sessionId)
-        }
-
-        // Log cost using CostTracker
-        if let cost = response.totalCostUsd {
-            let sessionId = response.sessionId ?? currentSessionId
-            CostTracker.shared.logCost(amount: cost, sessionId: sessionId)
         }
 
         return response
@@ -118,22 +121,23 @@ actor ClaudeService {
     }
 
     /// Checks if the Claude CLI is available
-    nonisolated func checkCLIAvailable() async -> Bool {
-        do {
-            let (output, exitCode) = try await runProcess(["which", "claude"], stdin: nil)
-            return exitCode == 0 && !output.isEmpty
-        } catch {
-            return false
-        }
+    func checkCLIAvailable() async -> Bool {
+        ExecutableResolver.resolve(name: "claude") != nil
     }
 
     /// Gets Claude CLI version
-    nonisolated func getCLIVersion() async -> String? {
+    func getCLIVersion() async -> String? {
         do {
-            let (output, exitCode) = try await runProcess(["claude", "--version"], stdin: nil)
-            if exitCode == 0 {
-                return output.trimmingCharacters(in: .whitespacesAndNewlines)
-            }
+            let claudeURL = try resolveClaudeExecutableURL()
+            let result = try await subprocessRunner.run(
+                executableURL: claudeURL,
+                arguments: ["--version"],
+                environment: subprocessEnvironment(),
+                currentDirectoryURL: workingDirectoryURL(),
+                stdin: nil
+            )
+            guard result.exitCode == 0 else { return nil }
+            return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         } catch {
             // CLI not available
         }
@@ -142,162 +146,69 @@ actor ClaudeService {
 
     // MARK: - Private Methods
 
-    private func runClaudeCLI(_ arguments: [String], stdin: String?, systemPrompt: String) async throws -> (String, Int32) {
-        // User message is passed via stdin (more secure than argv)
-        // System prompt is passed as argument (less sensitive, contains app context)
-        var fullArgs = ["claude"] + arguments
-        fullArgs += ["--system-prompt", systemPrompt]
-
-        return try await runProcess(fullArgs, stdin: stdin)
+    private func resolveClaudeExecutableURL() throws -> URL {
+        if let url = ExecutableResolver.resolve(name: "claude") {
+            return url
+        }
+        throw ClaudeError.cliNotFound
     }
 
-    private nonisolated func runProcess(_ arguments: [String], stdin: String?) async throws -> (String, Int32) {
-        return try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let process = Process()
-                let stdoutPipe = Pipe()
-                let stderrPipe = Pipe()
-                let stdinPipe = Pipe()
+    private func workingDirectoryURL() -> URL {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let conductorDir = appSupport.appendingPathComponent("Conductor", isDirectory: true)
+        try? FileManager.default.createDirectory(at: conductorDir, withIntermediateDirectories: true)
+        return conductorDir
+    }
 
-                process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-                process.arguments = arguments
-                process.standardOutput = stdoutPipe
-                process.standardError = stderrPipe
-                process.standardInput = stdinPipe
+    private func subprocessEnvironment() -> [String: String] {
+        let env = ProcessInfo.processInfo.environment
 
-                // Build a minimal, safe environment
-                // Don't inherit the full parent environment which may contain secrets
-                var environment: [String: String] = [:]
+        var sanitized: [String: String] = [:]
+        let allowList: Set<String> = [
+            "PATH", "HOME", "USER", "LOGNAME", "SHELL",
+            "LANG", "LC_ALL", "LC_CTYPE",
+            "TMPDIR", "TMP", "TEMP",
+            "XDG_CONFIG_HOME", "XDG_DATA_HOME"
+        ]
 
-                // Always set PATH including common CLI locations
-                // GUI apps may have minimal/missing PATH
-                let defaultPath = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-                if let existingPath = ProcessInfo.processInfo.environment["PATH"] {
-                    environment["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + existingPath
-                } else {
-                    environment["PATH"] = defaultPath
-                }
-
-                // Pass through only necessary environment variables
-                let safeVars = ["HOME", "USER", "LANG", "LC_ALL", "TMPDIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME"]
-                for key in safeVars {
-                    if let value = ProcessInfo.processInfo.environment[key] {
-                        environment[key] = value
-                    }
-                }
-
-                process.environment = environment
-
-                do {
-                    try process.run()
-
-                    // Write stdin content if provided, then close
-                    if let stdinContent = stdin, let data = stdinContent.data(using: .utf8) {
-                        stdinPipe.fileHandleForWriting.write(data)
-                    }
-                    stdinPipe.fileHandleForWriting.closeFile()
-
-                    // Read pipes BEFORE waiting to prevent deadlock
-                    // If the child writes enough to fill the pipe buffer and we're
-                    // waiting for exit, we'll deadlock
-                    let outputData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-                    let errorData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-
-                    // Now wait for process to exit
-                    process.waitUntilExit()
-
-                    var output = String(data: outputData, encoding: .utf8) ?? ""
-
-                    // If no stdout, check stderr
-                    if output.isEmpty {
-                        output = String(data: errorData, encoding: .utf8) ?? ""
-                    }
-
-                    continuation.resume(returning: (output, process.terminationStatus))
-                } catch {
-                    continuation.resume(throwing: ClaudeError.processError(error.localizedDescription))
-                }
+        for (key, value) in env {
+            if allowList.contains(key) || key.hasPrefix("CLAUDE_") || key.hasPrefix("ANTHROPIC_") {
+                sanitized[key] = value
             }
         }
+
+        let defaultPaths = [
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "\(FileManager.default.homeDirectoryForCurrentUser.path)/.local/bin",
+            "\(FileManager.default.homeDirectoryForCurrentUser.path)/bin"
+        ]
+        let existing = sanitized["PATH"] ?? env["PATH"] ?? ""
+        sanitized["PATH"] = (defaultPaths + [existing])
+            .filter { !$0.isEmpty }
+            .joined(separator: ":")
+
+        return sanitized
     }
 
-    private func parseResponse(_ output: String) throws -> ClaudeResponse {
-        guard let data = output.data(using: .utf8) else {
-            throw ClaudeError.invalidResponse
-        }
-
-        // Try to parse as standard JSON response first
+    private func runClaudeCLI(_ arguments: [String], stdin: Data?) async throws -> SubprocessResult {
         do {
-            let response = try JSONDecoder().decode(ClaudeResponse.self, from: data)
-            return response
+            let claudeURL = try resolveClaudeExecutableURL()
+            return try await subprocessRunner.run(
+                executableURL: claudeURL,
+                arguments: arguments,
+                environment: subprocessEnvironment(),
+                currentDirectoryURL: workingDirectoryURL(),
+                stdin: stdin
+            )
+        } catch let error as ClaudeError {
+            throw error
         } catch {
-            // Try to parse as stream-json (multiple JSON objects)
-            return try parseStreamResponse(output)
+            throw ClaudeError.processError(error.localizedDescription)
         }
     }
 
-    private func parseStreamResponse(_ output: String) throws -> ClaudeResponse {
-        var resultText = ""
-        var sessionId: String?
-        var totalCost: Double?
-        var isError: Bool?
-
-        // More robust parsing: handle potential multi-line JSON or mixed content
-        // Split by newlines but also handle cases where JSON might span lines
-        var jsonBuffer = ""
-        var braceCount = 0
-
-        for char in output {
-            jsonBuffer.append(char)
-
-            if char == "{" {
-                braceCount += 1
-            } else if char == "}" {
-                braceCount -= 1
-
-                // When we close all braces, try to parse
-                if braceCount == 0 && !jsonBuffer.trimmingCharacters(in: .whitespaces).isEmpty {
-                    if let data = jsonBuffer.data(using: .utf8),
-                       let message = try? JSONDecoder().decode(StreamMessage.self, from: data) {
-                        if let content = message.message?.content {
-                            resultText += content
-                        }
-                        if let sid = message.session_id {
-                            sessionId = sid
-                        }
-                        if let result = message.result {
-                            resultText = result
-                        }
-                        if let cost = message.total_cost_usd {
-                            totalCost = cost
-                        }
-                        if let error = message.is_error {
-                            isError = error
-                        }
-                    }
-                    jsonBuffer = ""
-                }
-            }
-        }
-
-        // If we couldn't parse anything, treat the whole output as the result
-        if resultText.isEmpty {
-            resultText = output.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-
-        return ClaudeResponse(
-            result: resultText,
-            totalCostUsd: totalCost,
-            sessionId: sessionId,
-            duration_ms: nil,
-            num_turns: nil,
-            is_error: isError
-        )
-    }
-
-    private func buildSystemPrompt(context: ContextData?) -> String {
-        let resourceInfo = getResourceSnapshot()
-
+    private func buildPrompt(userMessage: String, context: ContextData?, history: [ChatMessage]) -> String {
         var prompt = """
         You are Conductor, a personal AI assistant running as a macOS menubar app.
         You help users manage their day, tasks, and projects.
@@ -306,19 +217,11 @@ actor ClaudeService {
         - Be concise and actionable
         - Use bullet points and clear formatting
         - Proactively suggest relevant actions
-        - Remember context from the conversation
 
-        Current date and time: \(formattedDateTime())
-
-        ## System Resources
-        \(resourceInfo)
-
-        You can help users check and manage system resources. If the system is under heavy load,
-        proactively mention it. You can run bash commands like `top -l 1`, `ps aux -r`, or `kill <pid>`
-        to help diagnose and resolve resource issues.
+        Current date and time: \(formattedDateTime(now()))
         """
 
-        if let context = context {
+        if let context {
             if !context.todayEvents.isEmpty {
                 prompt += "\n\n## Today's Calendar:\n"
                 for event in context.todayEvents {
@@ -349,52 +252,17 @@ actor ClaudeService {
             }
         }
 
+        // Claude CLI maintains conversation context via --resume; history is currently unused.
+        _ = history
+
+        prompt += "\n\n## User:\n\(userMessage)\n"
         return prompt
     }
 
-    private func formattedDateTime() -> String {
+    private func formattedDateTime(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "EEEE, MMMM d, yyyy 'at' h:mm a"
-        return formatter.string(from: Date())
-    }
-
-    /// Gets a quick snapshot of system resources (CPU, memory, top processes)
-    private nonisolated func getResourceSnapshot() -> String {
-        let process = Process()
-        let pipe = Pipe()
-
-        process.executableURL = URL(fileURLWithPath: "/bin/bash")
-        process.arguments = ["-c", """
-            echo "Memory: $(memory_pressure 2>/dev/null | grep 'System-wide' | awk '{print $NF}')"
-            top -l 1 -n 5 -stats pid,command,cpu,mem 2>/dev/null | tail -6
-            """]
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            if let output = String(data: data, encoding: .utf8), !output.isEmpty {
-                return output.trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-        } catch {
-            // Silently fail - resource info is optional context
-        }
-
-        return "Unable to fetch resource info"
-    }
-
-    private func extractTitle(from message: String) -> String {
-        // Extract first 50 characters or first sentence as session title
-        let truncated = String(message.prefix(50))
-        if let periodIndex = truncated.firstIndex(of: ".") {
-            return String(truncated[..<periodIndex])
-        }
-        if let newlineIndex = truncated.firstIndex(of: "\n") {
-            return String(truncated[..<newlineIndex])
-        }
-        return truncated
+        return formatter.string(from: date)
     }
 }
 
@@ -419,6 +287,71 @@ enum ClaudeError: LocalizedError {
             return "Invalid response from Claude CLI."
         case .sessionError(let message):
             return "Session error: \(message)"
+        }
+    }
+}
+
+// MARK: - Output Parsing
+
+extension ClaudeService {
+    enum OutputParser {
+        static func parse(_ output: String) throws -> ClaudeResponse {
+            let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let data = trimmed.data(using: .utf8) else {
+                throw ClaudeError.invalidResponse
+            }
+
+            do {
+                return try JSONDecoder().decode(ClaudeResponse.self, from: data)
+            } catch {
+                return try parseStreamResponse(trimmed)
+            }
+        }
+
+        private static func parseStreamResponse(_ output: String) throws -> ClaudeResponse {
+            let lines = output
+                .components(separatedBy: "\n")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+
+            var resultText = ""
+            var sessionId: String?
+            var totalCost: Double?
+            var isError: Bool?
+
+            for line in lines {
+                guard let data = line.data(using: .utf8) else { continue }
+                guard let message = try? JSONDecoder().decode(StreamMessage.self, from: data) else { continue }
+
+                if let content = message.message?.content {
+                    resultText += content
+                }
+                if let sid = message.session_id {
+                    sessionId = sid
+                }
+                if let result = message.result {
+                    resultText = result
+                }
+                if let cost = message.total_cost_usd {
+                    totalCost = cost
+                }
+                if let error = message.is_error {
+                    isError = error
+                }
+            }
+
+            if resultText.isEmpty {
+                resultText = output.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+
+            return ClaudeResponse(
+                result: resultText,
+                totalCostUsd: totalCost,
+                sessionId: sessionId,
+                duration_ms: nil,
+                num_turns: nil,
+                is_error: isError
+            )
         }
     }
 }

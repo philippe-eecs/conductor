@@ -46,6 +46,16 @@ final class Database {
         setupDatabase()
     }
 
+    /// Internal initializer intended for tests (e.g. in-memory databases).
+    init(connection: Connection) {
+        db = connection
+        do {
+            try createTables()
+        } catch {
+            print("Database initialization failed: \(error)")
+        }
+    }
+
     private func setupDatabase() {
         do {
             let dbPath = getDatabasePath()

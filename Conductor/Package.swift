@@ -20,7 +20,16 @@ let package = Package(
                 .product(name: "SQLite", package: "SQLite.swift"),
                 .product(name: "SwiftSoup", package: "SwiftSoup")
             ],
-            path: "Sources"
+            path: "Sources",
+            exclude: [
+                "Info.plist",
+                "Conductor.entitlements"
+            ]
+        ),
+        .testTarget(
+            name: "ConductorTests",
+            dependencies: ["Conductor"],
+            path: "Tests"
         )
     ]
 )

@@ -149,8 +149,10 @@ class AppState: ObservableObject {
         }
 
         do {
-            // Build context for the AI
-            let context = await ContextBuilder.shared.buildContext()
+            // Build context off the main actor (EventKit calls are synchronous under the hood).
+            let context = await Task.detached(priority: .userInitiated) {
+                await ContextBuilder.shared.buildContext()
+            }.value
             let response = try await claudeService.sendMessage(content, context: context, history: messages)
 
             let assistantMessage = ChatMessage(role: .assistant, content: response.result)
@@ -164,7 +166,20 @@ class AppState: ObservableObject {
                 currentSessionId = newSessionId
             }
 
-            // Refresh cost data and sessions in background
+            // Persist session metadata and cost off-main, then refresh UI models.
+            let sessionToPersist = currentSessionId
+            let title = extractTitle(from: content)
+            let costToLog = response.totalCostUsd
+            await Task.detached(priority: .utility) {
+                if let sid = sessionToPersist {
+                    try? Database.shared.saveSession(id: sid, title: title)
+                    try? Database.shared.associateOrphanedMessages(withSession: sid)
+                }
+                if let cost = costToLog {
+                    try? Database.shared.logCost(amount: cost, sessionId: sessionToPersist)
+                }
+            }.value
+
             loadCostData()
             loadSessions()
 
@@ -181,6 +196,17 @@ class AppState: ObservableObject {
             messages.append(errorMessage)
             isLoading = false
         }
+    }
+
+    private func extractTitle(from message: String) -> String {
+        let truncated = String(message.prefix(50))
+        if let periodIndex = truncated.firstIndex(of: ".") {
+            return String(truncated[..<periodIndex])
+        }
+        if let newlineIndex = truncated.firstIndex(of: "\n") {
+            return String(truncated[..<newlineIndex])
+        }
+        return truncated
     }
 
     func clearHistory() {
