@@ -65,13 +65,19 @@ actor ClaudeService {
     ///   - userMessage: The user's message
     ///   - context: Optional context data (calendar, reminders, etc.)
     ///   - history: Previous chat messages (used for building context, not sent directly)
+    ///   - toolsEnabled: When true, Claude can use tools (with user approval). Default: false (safe mode)
     /// - Returns: The assistant's response
-    func sendMessage(_ userMessage: String, context: ContextData?, history: [ChatMessage]) async throws -> ClaudeResponse {
+    func sendMessage(_ userMessage: String, context: ContextData?, history: [ChatMessage], toolsEnabled: Bool = false) async throws -> ClaudeResponse {
         // Build arguments for the claude CLI.
         // - Use --print for non-interactive mode.
         // - Pass the full prompt via stdin to avoid leaking content via argv.
-        // - Disable tools by default for safety (no file edits / shell commands).
-        var args = ["--print", "--input-format", "text", "--output-format", "json", "--model", model, "--tools", ""]
+        var args = ["--print", "--input-format", "text", "--output-format", "json", "--model", model]
+
+        // Tools mode: disabled by default for safety, enabled allows Claude to execute commands
+        // When enabled, Claude Code will prompt for approval on dangerous operations
+        if !toolsEnabled {
+            args += ["--tools", ""]
+        }
 
         // Continue session if we have one
         if let sessionId = currentSessionId {

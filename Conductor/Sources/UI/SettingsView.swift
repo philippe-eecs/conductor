@@ -34,6 +34,11 @@ struct SettingsView: View {
 
                     Divider()
 
+                    // Assistant Mode
+                    assistantModeSection
+
+                    Divider()
+
                     // Cost Tracking
                     costTrackingSection
 
@@ -136,6 +141,94 @@ struct SettingsView: View {
                 .font(.caption)
                 .foregroundColor(.secondary)
         }
+    }
+
+    // MARK: - Assistant Mode Section
+
+    private var assistantModeSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Assistant Mode", systemImage: "wand.and.stars")
+                .font(.headline)
+
+            VStack(alignment: .leading, spacing: 16) {
+                // Safe mode (default)
+                modeOption(
+                    title: "Safe Mode",
+                    description: "Q&A only. Cannot execute commands or modify files.",
+                    icon: "shield.fill",
+                    iconColor: .green,
+                    isSelected: !appState.toolsEnabled
+                ) {
+                    appState.setToolsEnabled(false)
+                }
+
+                // Tool mode
+                modeOption(
+                    title: "Tool Mode",
+                    description: "Can execute commands and actions with your approval.",
+                    icon: "hammer.fill",
+                    iconColor: .orange,
+                    isSelected: appState.toolsEnabled
+                ) {
+                    appState.setToolsEnabled(true)
+                }
+            }
+
+            if appState.toolsEnabled {
+                HStack(spacing: 6) {
+                    Image(systemName: "info.circle")
+                        .foregroundColor(.blue)
+                    Text("Claude will ask for permission before running commands or making changes.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.top, 4)
+            }
+        }
+    }
+
+    private func modeOption(
+        title: String,
+        description: String,
+        icon: String,
+        iconColor: Color,
+        isSelected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .foregroundColor(iconColor)
+                    .font(.title2)
+                    .frame(width: 28)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .foregroundColor(.primary)
+                    Text(description)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                Spacer()
+
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.accentColor)
+                        .font(.title3)
+                }
+            }
+            .padding(10)
+            .background(isSelected ? Color.accentColor.opacity(0.1) : Color(NSColor.controlBackgroundColor))
+            .cornerRadius(8)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Cost Tracking Section

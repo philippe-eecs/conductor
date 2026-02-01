@@ -42,11 +42,17 @@ class AppState: ObservableObject {
     @Published var calendarAccessGranted: Bool = false
     @Published var remindersAccessGranted: Bool = false
 
+    // Tool mode: when enabled, Claude can execute commands (with approval prompts)
+    @Published var toolsEnabled: Bool = false
+
     private let claudeService = ClaudeService.shared
 
     init() {
         // Check if setup completed (lightweight preference read is OK on main thread)
         hasCompletedSetup = (try? Database.shared.getPreference(key: "setup_completed")) == "true"
+
+        // Load tools preference (default: disabled for safety)
+        toolsEnabled = (try? Database.shared.getPreference(key: "tools_enabled")) == "true"
 
         // Check current permission states
         refreshPermissionStates()
@@ -90,6 +96,13 @@ class AppState: ObservableObject {
             try? Database.shared.setPreference(key: "setup_completed", value: "true")
         }
         refreshPermissionStates()
+    }
+
+    func setToolsEnabled(_ enabled: Bool) {
+        toolsEnabled = enabled
+        Task.detached(priority: .utility) {
+            try? Database.shared.setPreference(key: "tools_enabled", value: enabled ? "true" : "false")
+        }
     }
 
     func checkCLIStatus() async {
@@ -153,7 +166,7 @@ class AppState: ObservableObject {
             let context = await Task.detached(priority: .userInitiated) {
                 await ContextBuilder.shared.buildContext()
             }.value
-            let response = try await claudeService.sendMessage(content, context: context, history: messages)
+            let response = try await claudeService.sendMessage(content, context: context, history: messages, toolsEnabled: toolsEnabled)
 
             let assistantMessage = ChatMessage(role: .assistant, content: response.result)
 
