@@ -10,6 +10,22 @@ struct SettingsView: View {
     @State private var statusMessage: String?
     @State private var showStatusMessage: Bool = false
 
+    // Planning preferences
+    @State private var planningEnabled: Bool = true
+    @State private var morningBriefHour: Int = 8
+    @State private var eveningBriefHour: Int = 18
+    @State private var focusSuggestionsEnabled: Bool = true
+    @State private var includeOverdueReminders: Bool = true
+    @State private var autoRollIncomplete: Bool = false
+
+    // Security & Permission preferences
+    @State private var calendarReadEnabled: Bool = true
+    @State private var calendarWriteEnabled: Bool = false
+    @State private var remindersReadEnabled: Bool = true
+    @State private var remindersWriteEnabled: Bool = false
+    @State private var emailEnabled: Bool = false
+    @State private var commandAllowlistEnabled: Bool = true
+
     var body: some View {
         VStack(spacing: 0) {
             // Header
@@ -49,6 +65,16 @@ struct SettingsView: View {
 
                     Divider()
 
+                    // Daily Planning
+                    dailyPlanningSection
+
+                    Divider()
+
+                    // Security & Permissions
+                    securitySection
+
+                    Divider()
+
                     // About Section
                     aboutSection
                 }
@@ -74,12 +100,34 @@ struct SettingsView: View {
         .frame(width: 450, height: 500)
         .onAppear {
             refreshPermissionStatuses()
+            loadPlanningPreferences()
         }
     }
 
     private func refreshPermissionStatuses() {
         calendarStatus = EventKitManager.shared.calendarAuthorizationStatus()
         remindersStatus = EventKitManager.shared.remindersAuthorizationStatus()
+    }
+
+    private func loadPlanningPreferences() {
+        planningEnabled = (try? Database.shared.getPreference(key: "planning_enabled")) != "false"
+        morningBriefHour = Int((try? Database.shared.getPreference(key: "morning_brief_hour")) ?? "8") ?? 8
+        eveningBriefHour = Int((try? Database.shared.getPreference(key: "evening_brief_hour")) ?? "18") ?? 18
+        focusSuggestionsEnabled = (try? Database.shared.getPreference(key: "focus_suggestions_enabled")) != "false"
+        includeOverdueReminders = (try? Database.shared.getPreference(key: "include_overdue_reminders")) != "false"
+        autoRollIncomplete = (try? Database.shared.getPreference(key: "auto_roll_incomplete")) == "true"
+
+        // Security preferences (default to safe values)
+        calendarReadEnabled = (try? Database.shared.getPreference(key: "calendar_read_enabled")) != "false"
+        calendarWriteEnabled = (try? Database.shared.getPreference(key: "calendar_write_enabled")) == "true"
+        remindersReadEnabled = (try? Database.shared.getPreference(key: "reminders_read_enabled")) != "false"
+        remindersWriteEnabled = (try? Database.shared.getPreference(key: "reminders_write_enabled")) == "true"
+        emailEnabled = (try? Database.shared.getPreference(key: "email_integration_enabled")) == "true"
+        commandAllowlistEnabled = (try? Database.shared.getPreference(key: "command_allowlist_enabled")) != "false"
+    }
+
+    private func savePlanningPreference(key: String, value: String) {
+        try? Database.shared.setPreference(key: key, value: value)
     }
 
     private func showStatus(_ message: String) {
@@ -398,6 +446,246 @@ struct SettingsView: View {
         case .restricted:
             return "Restricted"
         }
+    }
+
+    // MARK: - Daily Planning Section
+
+    private var dailyPlanningSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Daily Planning", systemImage: "calendar.badge.clock")
+                .font(.headline)
+
+            // Master toggle
+            Toggle("Enable daily planning", isOn: $planningEnabled)
+                .onChange(of: planningEnabled) { _, newValue in
+                    savePlanningPreference(key: "planning_enabled", value: newValue ? "true" : "false")
+                }
+
+            if planningEnabled {
+                VStack(alignment: .leading, spacing: 12) {
+                    // Morning Brief Time
+                    HStack {
+                        Text("Morning Brief")
+                            .font(.subheadline)
+                        Spacer()
+                        Picker("", selection: $morningBriefHour) {
+                            ForEach(5..<12, id: \.self) { hour in
+                                Text("\(hour):00 AM").tag(hour)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .frame(width: 120)
+                        .onChange(of: morningBriefHour) { _, newValue in
+                            savePlanningPreference(key: "morning_brief_hour", value: String(newValue))
+                        }
+                    }
+
+                    // Evening Shutdown Time
+                    HStack {
+                        Text("Evening Shutdown")
+                            .font(.subheadline)
+                        Spacer()
+                        Picker("", selection: $eveningBriefHour) {
+                            ForEach(16..<22, id: \.self) { hour in
+                                Text("\(hour > 12 ? hour - 12 : hour):00 \(hour >= 12 ? "PM" : "AM")").tag(hour)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .frame(width: 120)
+                        .onChange(of: eveningBriefHour) { _, newValue in
+                            savePlanningPreference(key: "evening_brief_hour", value: String(newValue))
+                        }
+                    }
+
+                    Divider()
+
+                    // Additional toggles
+                    Toggle("Show focus block suggestions", isOn: $focusSuggestionsEnabled)
+                        .font(.subheadline)
+                        .onChange(of: focusSuggestionsEnabled) { _, newValue in
+                            savePlanningPreference(key: "focus_suggestions_enabled", value: newValue ? "true" : "false")
+                        }
+
+                    Toggle("Include overdue reminders in briefs", isOn: $includeOverdueReminders)
+                        .font(.subheadline)
+                        .onChange(of: includeOverdueReminders) { _, newValue in
+                            savePlanningPreference(key: "include_overdue_reminders", value: newValue ? "true" : "false")
+                        }
+
+                    Toggle("Auto-roll incomplete goals", isOn: $autoRollIncomplete)
+                        .font(.subheadline)
+                        .onChange(of: autoRollIncomplete) { _, newValue in
+                            savePlanningPreference(key: "auto_roll_incomplete", value: newValue ? "true" : "false")
+                        }
+                }
+                .padding(.leading, 4)
+            }
+
+            Text("Daily briefs help you start and end your day with intention.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+
+    // MARK: - Security Section
+
+    private var securitySection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Security & Permissions", systemImage: "lock.shield")
+                .font(.headline)
+
+            Text("Control what data Conductor can access and what actions it can perform.")
+                .font(.callout)
+                .foregroundColor(.secondary)
+
+            // Data Access Permissions
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Data Access")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .foregroundColor(.secondary)
+
+                // Calendar permissions
+                permissionToggleRow(
+                    title: "Calendar",
+                    icon: "calendar",
+                    readEnabled: $calendarReadEnabled,
+                    writeEnabled: $calendarWriteEnabled,
+                    readKey: "calendar_read_enabled",
+                    writeKey: "calendar_write_enabled"
+                )
+
+                // Reminders permissions
+                permissionToggleRow(
+                    title: "Reminders",
+                    icon: "checklist",
+                    readEnabled: $remindersReadEnabled,
+                    writeEnabled: $remindersWriteEnabled,
+                    readKey: "reminders_read_enabled",
+                    writeKey: "reminders_write_enabled"
+                )
+
+                // Email toggle
+                HStack {
+                    Image(systemName: "envelope")
+                        .foregroundColor(.blue)
+                        .frame(width: 20)
+                    Text("Email")
+                        .font(.subheadline)
+                    Spacer()
+                    Toggle("", isOn: $emailEnabled)
+                        .labelsHidden()
+                        .onChange(of: emailEnabled) { _, newValue in
+                            savePlanningPreference(key: "email_integration_enabled", value: newValue ? "true" : "false")
+                            logSecurityChange("Email integration", enabled: newValue)
+                        }
+                }
+                .padding(8)
+                .background(Color(NSColor.controlBackgroundColor))
+                .cornerRadius(6)
+            }
+
+            // Command Execution
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Command Execution")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .foregroundColor(.secondary)
+
+                // Command allowlist toggle
+                HStack {
+                    Image(systemName: "terminal")
+                        .foregroundColor(.orange)
+                        .frame(width: 20)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Command Allowlist")
+                            .font(.subheadline)
+                        Text("Only allow safe commands (git, ls, cat)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    Toggle("", isOn: $commandAllowlistEnabled)
+                        .labelsHidden()
+                        .onChange(of: commandAllowlistEnabled) { _, newValue in
+                            savePlanningPreference(key: "command_allowlist_enabled", value: newValue ? "true" : "false")
+                            logSecurityChange("Command allowlist", enabled: newValue)
+                        }
+                }
+                .padding(8)
+                .background(Color(NSColor.controlBackgroundColor))
+                .cornerRadius(6)
+
+                if appState.toolsEnabled && !commandAllowlistEnabled {
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+                        Text("Warning: Tool mode is enabled without command restrictions. Claude can execute any command.")
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                    }
+                    .padding(.top, 4)
+                }
+            }
+
+            // Allowed commands info
+            if commandAllowlistEnabled {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Allowed Commands")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundColor(.secondary)
+
+                    Text("git (status, diff, log), ls, cat, head, tail, echo, pwd")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding(6)
+                        .background(Color(NSColor.textBackgroundColor))
+                        .cornerRadius(4)
+                }
+            }
+        }
+    }
+
+    private func permissionToggleRow(
+        title: String,
+        icon: String,
+        readEnabled: Binding<Bool>,
+        writeEnabled: Binding<Bool>,
+        readKey: String,
+        writeKey: String
+    ) -> some View {
+        HStack {
+            Image(systemName: icon)
+                .foregroundColor(.blue)
+                .frame(width: 20)
+            Text(title)
+                .font(.subheadline)
+            Spacer()
+            HStack(spacing: 12) {
+                Toggle("Read", isOn: readEnabled)
+                    .toggleStyle(.checkbox)
+                    .font(.caption)
+                    .onChange(of: readEnabled.wrappedValue) { _, newValue in
+                        savePlanningPreference(key: readKey, value: newValue ? "true" : "false")
+                        logSecurityChange("\(title) read access", enabled: newValue)
+                    }
+                Toggle("Write", isOn: writeEnabled)
+                    .toggleStyle(.checkbox)
+                    .font(.caption)
+                    .onChange(of: writeEnabled.wrappedValue) { _, newValue in
+                        savePlanningPreference(key: writeKey, value: newValue ? "true" : "false")
+                        logSecurityChange("\(title) write access", enabled: newValue)
+                    }
+            }
+        }
+        .padding(8)
+        .background(Color(NSColor.controlBackgroundColor))
+        .cornerRadius(6)
+    }
+
+    private func logSecurityChange(_ setting: String, enabled: Bool) {
+        appState.logActivity(.system, "\(setting) \(enabled ? "enabled" : "disabled")")
     }
 
     // MARK: - About Section

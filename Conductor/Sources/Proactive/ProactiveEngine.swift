@@ -1,16 +1,14 @@
 import Foundation
 import UserNotifications
 
-/// Proactive engine that runs periodic checks and sends notifications
+/// Proactive engine that coordinates event-driven scheduling and notifications
 final class ProactiveEngine {
     static let shared = ProactiveEngine()
-
-    private var quickCheckTimer: Timer?
-    private var synthesisTimer: Timer?
 
     private let eventKitManager = EventKitManager.shared
     private let localRuleEngine = LocalRuleEngine.shared
     private let fatigueManager = FatigueManager.shared
+    private let eventScheduler = EventScheduler.shared
 
     private var isRunning = false
 
@@ -25,39 +23,14 @@ final class ProactiveEngine {
         // Request notification permissions
         requestNotificationPermission()
 
-        // Start quick check timer (every 60 seconds)
-        quickCheckTimer = Timer.scheduledTimer(
-            withTimeInterval: 60,
-            repeats: true
-        ) { [weak self] _ in
-            Task {
-                await self?.runQuickCheck()
-            }
-        }
+        // Start event-driven scheduler (handles meeting warnings, daily/weekly/monthly jobs)
+        eventScheduler.start()
 
-        // Start synthesis timer (every 30 minutes)
-        synthesisTimer = Timer.scheduledTimer(
-            withTimeInterval: 30 * 60,
-            repeats: true
-        ) { [weak self] _ in
-            Task {
-                await self?.runSynthesis()
-            }
-        }
-
-        // Run initial check
-        Task {
-            await runQuickCheck()
-        }
-
-        print("ProactiveEngine started")
+        print("ProactiveEngine started (event-driven mode)")
     }
 
     func stop() {
-        quickCheckTimer?.invalidate()
-        synthesisTimer?.invalidate()
-        quickCheckTimer = nil
-        synthesisTimer = nil
+        eventScheduler.stop()
         isRunning = false
 
         print("ProactiveEngine stopped")
@@ -76,17 +49,32 @@ final class ProactiveEngine {
         }
     }
 
-    // MARK: - Quick Check (Tier 1)
+    // MARK: - Focus Block Suggestions
 
-    private func runQuickCheck() async {
-        // Get upcoming events
+    /// Called by EventScheduler or manually to check for focus block opportunities
+    func checkFocusBlockSuggestions() async {
+        // Check if focus suggestions are enabled
+        let focusSuggestionsEnabled = (try? Database.shared.getPreference(key: "focus_suggestions_enabled")) != "false"
+        guard focusSuggestionsEnabled else { return }
+
         let events = await eventKitManager.getTodayEvents()
 
-        // Run local rules (no AI, no cost)
-        let alerts = localRuleEngine.checkForAlerts(events: events)
+        // Check if there are incomplete high-priority goals
+        let today = DailyPlanningService.todayDateString
+        let goals = (try? Database.shared.getGoalsForDate(today)) ?? []
+        let hasIncompleteGoals = goals.contains { !$0.isCompleted }
 
-        // Filter through fatigue manager
-        for alert in alerts {
+        if let gap = localRuleEngine.shouldSuggestFocusBlock(
+            events: events,
+            hasHighPriorityTasks: hasIncompleteGoals
+        ) {
+            let alert = ProactiveAlert(
+                title: "Focus block available",
+                body: "You have \(gap.formattedDuration) free (\(gap.formattedTimeRange)). Block time for deep work?",
+                category: .suggestion,
+                priority: .low
+            )
+
             if fatigueManager.shouldShow(alert: alert) {
                 await sendNotification(alert)
                 fatigueManager.recordShown(alert: alert)
@@ -94,15 +82,12 @@ final class ProactiveEngine {
         }
     }
 
-    // MARK: - Synthesis (Tier 2)
-
-    private func runSynthesis() async {
-        // This would use a cheap AI model to synthesize context
-        // For MVP, we'll skip this and just use local rules
-        print("Synthesis check (placeholder)")
-    }
-
     // MARK: - Notifications
+
+    /// Public method for EventScheduler to send notifications
+    func sendNotificationPublic(_ alert: ProactiveAlert) async {
+        await sendNotification(alert)
+    }
 
     private func sendNotification(_ alert: ProactiveAlert) async {
         let content = UNMutableNotificationContent()

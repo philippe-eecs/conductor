@@ -15,12 +15,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Initialize database
         _ = Database.shared
 
-        // Start proactive engine (for future use)
-        // ProactiveEngine.shared.start()
+        // Initialize notification manager (sets up actionable notification categories)
+        _ = NotificationManager.shared
+
+        // Start proactive engine (event-driven scheduling)
+        ProactiveEngine.shared.start()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         unregisterGlobalHotkey()
+        ProactiveEngine.shared.stop()
     }
 
     // MARK: - Global Hotkey

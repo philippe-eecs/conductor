@@ -1,11 +1,29 @@
 import SwiftUI
 import AppKit
 
+enum ConductorTab: String, CaseIterable {
+    case chat = "Chat"
+    case todo = "TODO"
+    case schedule = "Schedule"
+    case activity = "Activity"
+
+    var icon: String {
+        switch self {
+        case .chat: return "bubble.left.and.bubble.right"
+        case .todo: return "checklist"
+        case .schedule: return "calendar"
+        case .activity: return "chart.bar"
+        }
+    }
+}
+
 struct ConductorView: View {
     @EnvironmentObject var appState: AppState
     @State private var inputText: String = ""
     @State private var showSettings: Bool = false
     @State private var showSessions: Bool = false
+    @State private var showPlanning: Bool = false
+    @State private var selectedTab: ConductorTab = .chat
     @FocusState private var isInputFocused: Bool
 
     var body: some View {
@@ -27,17 +45,22 @@ struct ConductorView: View {
 
             Divider()
 
-            // Messages
+            // Tab Bar
+            tabBarView
+
+            Divider()
+
+            // Tab Content
             if appState.cliAvailable {
-                messagesView
+                tabContentView
             } else {
                 cliNotFoundView
             }
 
             Divider()
 
-            // Input
-            if appState.cliAvailable {
+            // Input (only visible for chat tab)
+            if appState.cliAvailable && selectedTab == .chat {
                 inputView
             }
         }
@@ -51,8 +74,60 @@ struct ConductorView: View {
             SessionsView()
                 .environmentObject(appState)
         }
+        .sheet(isPresented: $showPlanning) {
+            DailyPlanningView()
+        }
         .onAppear {
             isInputFocused = true
+        }
+    }
+
+    // MARK: - Tab Bar
+
+    private var tabBarView: some View {
+        HStack(spacing: 0) {
+            ForEach(ConductorTab.allCases, id: \.self) { tab in
+                TabButton(
+                    tab: tab,
+                    isSelected: selectedTab == tab,
+                    badgeCount: badgeCount(for: tab)
+                ) {
+                    selectedTab = tab
+                }
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color(NSColor.windowBackgroundColor))
+    }
+
+    private func badgeCount(for tab: ConductorTab) -> Int {
+        switch tab {
+        case .chat:
+            return 0
+        case .todo:
+            return (try? Database.shared.getTodayTasks(includeCompleted: false).count) ?? 0
+        case .schedule:
+            return 0
+        case .activity:
+            return appState.recentActivity.filter { $0.type == .error }.count
+        }
+    }
+
+    // MARK: - Tab Content
+
+    @ViewBuilder
+    private var tabContentView: some View {
+        switch selectedTab {
+        case .chat:
+            messagesView
+        case .todo:
+            TodoListView()
+        case .schedule:
+            ScheduleTabView()
+        case .activity:
+            ActivityTabView()
+                .environmentObject(appState)
         }
     }
 
@@ -76,6 +151,13 @@ struct ConductorView: View {
             }
 
             Spacer()
+
+            // Planning button
+            Button(action: { showPlanning = true }) {
+                Image(systemName: "calendar.badge.clock")
+            }
+            .buttonStyle(.plain)
+            .help("Daily Planning")
 
             // Sessions button
             Button(action: { showSessions = true }) {
@@ -287,6 +369,42 @@ struct ConductorView: View {
         Task {
             await appState.sendMessage(content)
         }
+    }
+}
+
+// MARK: - Tab Button
+
+struct TabButton: View {
+    let tab: ConductorTab
+    let isSelected: Bool
+    var badgeCount: Int = 0
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: tab.icon)
+                    .font(.caption)
+                Text(tab.rawValue)
+                    .font(.caption)
+
+                if badgeCount > 0 {
+                    Text("\(badgeCount)")
+                        .font(.caption2)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(Color.red)
+                        .cornerRadius(6)
+                }
+            }
+            .foregroundColor(isSelected ? .accentColor : .secondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(isSelected ? Color.accentColor.opacity(0.1) : Color.clear)
+            .cornerRadius(6)
+        }
+        .buttonStyle(.plain)
     }
 }
 

@@ -81,4 +81,50 @@ final class ClaudeServiceTests: XCTestCase {
         XCTAssertEqual(parsed.totalCostUsd ?? 0, 0.2, accuracy: 0.000001)
         XCTAssertEqual(parsed.is_error, false)
     }
+
+    func test_sendMessage_includesCalendarAndRemindersInPrompt() async throws {
+        let json = #"{"result":"OK","total_cost_usd":0.01,"session_id":"sess_1","is_error":false}"#
+        let runner = StubSubprocessRunner(nextResult: SubprocessResult(exitCode: 0, stdout: json, stderr: ""))
+        let fixedNow = Date(timeIntervalSince1970: 1_700_000_000)
+        let service = ClaudeService(subprocessRunner: runner, now: { fixedNow })
+
+        var context = ContextData()
+        context.todayEvents = [
+            .init(time: "9:00 AM", title: "Standup", location: "Zoom", duration: "30m")
+        ]
+        context.upcomingReminders = [
+            .init(title: "Call mom", dueDate: "Feb 2, 2026", priority: 0)
+        ]
+        context.recentNotes = ["Project X: remember to ship"]
+
+        _ = try await service.sendMessage("What's on my calendar today?", context: context, history: [])
+
+        let invocation = await runner.invocations.first
+        let stdin = String(data: invocation?.stdin ?? Data(), encoding: .utf8) ?? ""
+
+        XCTAssertTrue(stdin.contains("## Today's Calendar:"))
+        XCTAssertTrue(stdin.contains("- 9:00 AM: Standup (Zoom)"))
+        XCTAssertTrue(stdin.contains("## Upcoming Reminders:"))
+        XCTAssertTrue(stdin.contains("Call mom"))
+    }
+
+    func test_sendMessage_withEmptyContext_doesNotClaimCalendarIsNotConnected() async throws {
+        let json = #"{"result":"OK","total_cost_usd":0.01,"session_id":"sess_1","is_error":false}"#
+        let runner = StubSubprocessRunner(nextResult: SubprocessResult(exitCode: 0, stdout: json, stderr: ""))
+        let fixedNow = Date(timeIntervalSince1970: 1_700_000_000)
+        let service = ClaudeService(subprocessRunner: runner, now: { fixedNow })
+
+        var context = ContextData()
+        context.todayEvents = []
+        context.upcomingReminders = []
+
+        _ = try await service.sendMessage("What's up?", context: context, history: [])
+
+        let invocation = await runner.invocations.first
+        let stdin = String(data: invocation?.stdin ?? Data(), encoding: .utf8) ?? ""
+
+        XCTAssertTrue(stdin.contains("- Calendar: No events today ✓"))
+        XCTAssertFalse(stdin.contains("- Calendar: Not connected"))
+        XCTAssertFalse(stdin.contains("## Today's Calendar:"))
+    }
 }

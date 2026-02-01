@@ -7,6 +7,34 @@ import Foundation
 actor ClaudeService {
     static let shared = ClaudeService()
 
+    // MARK: - Command Security
+
+    /// Allowed commands when command allowlist is enabled
+    /// These are safe, read-only commands that won't modify the system
+    static let allowedCommands: Set<String> = [
+        "git", "ls", "cat", "head", "tail", "echo", "pwd", "which", "whoami",
+        "date", "cal", "wc", "sort", "uniq", "grep", "find", "tree", "file",
+        "diff", "less", "more"
+    ]
+
+    /// Allowed git subcommands (read-only operations)
+    static let allowedGitSubcommands: Set<String> = [
+        "status", "diff", "log", "show", "branch", "remote", "tag",
+        "blame", "shortlog", "describe", "rev-parse", "config"
+    ]
+
+    /// Blocked commands that should never be executed
+    static let blockedCommands: Set<String> = [
+        "rm", "rmdir", "mv", "cp", "chmod", "chown", "chgrp",
+        "curl", "wget", "ssh", "scp", "rsync", "ftp", "sftp",
+        "sudo", "su", "doas", "pkexec",
+        "kill", "killall", "pkill",
+        "shutdown", "reboot", "halt",
+        "mkfs", "fdisk", "dd", "mount", "umount",
+        "apt", "apt-get", "brew", "pip", "npm", "yarn", "cargo",
+        "systemctl", "service", "launchctl"
+    ]
+
     /// Current session ID for conversation continuity
     private var currentSessionId: String?
 
@@ -150,6 +178,101 @@ actor ClaudeService {
         return nil
     }
 
+    // MARK: - Command Security Validation
+
+    /// Validates if a command is allowed based on security settings
+    /// - Parameters:
+    ///   - command: The command string to validate
+    ///   - allowlistEnabled: Whether the command allowlist is enabled
+    /// - Returns: A CommandValidationResult indicating if the command is allowed
+    func validateCommand(_ command: String, allowlistEnabled: Bool) -> CommandValidationResult {
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return .denied(reason: "Empty command")
+        }
+
+        // Parse the command to get the base command and arguments
+        let components = trimmed.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+        guard let baseCommand = components.first else {
+            return .denied(reason: "Invalid command format")
+        }
+
+        // Extract just the command name (handle paths like /usr/bin/git)
+        let commandName = (baseCommand as NSString).lastPathComponent
+
+        // Always block dangerous commands regardless of allowlist setting
+        if Self.blockedCommands.contains(commandName) {
+            return .denied(reason: "Command '\(commandName)' is blocked for security")
+        }
+
+        // Check for shell injection patterns
+        if containsShellInjection(trimmed) {
+            return .denied(reason: "Command contains potentially unsafe patterns")
+        }
+
+        // If allowlist is disabled, allow (with warning logged)
+        guard allowlistEnabled else {
+            return .allowed(warning: "Command allowlist disabled - executing unrestricted")
+        }
+
+        // Check if command is in allowlist
+        if Self.allowedCommands.contains(commandName) {
+            // Special handling for git - check subcommand
+            if commandName == "git" && components.count > 1 {
+                let gitSubcommand = components[1]
+                if Self.allowedGitSubcommands.contains(gitSubcommand) {
+                    return .allowed(warning: nil)
+                } else {
+                    return .denied(reason: "Git subcommand '\(gitSubcommand)' is not in allowlist")
+                }
+            }
+            return .allowed(warning: nil)
+        }
+
+        return .denied(reason: "Command '\(commandName)' is not in allowlist")
+    }
+
+    /// Checks for common shell injection patterns
+    private func containsShellInjection(_ command: String) -> Bool {
+        let dangerousPatterns = [
+            "$(", "`",           // Command substitution
+            "&&", "||", ";",     // Command chaining
+            "|",                 // Piping (could be used for exfiltration)
+            ">", ">>",           // Output redirection
+            "<",                 // Input redirection
+            "\\n", "\\r",        // Newline injection
+            "${",                // Variable expansion that could be exploited
+        ]
+
+        for pattern in dangerousPatterns {
+            if command.contains(pattern) {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    /// Result of command validation
+    enum CommandValidationResult {
+        case allowed(warning: String?)
+        case denied(reason: String)
+
+        var isAllowed: Bool {
+            if case .allowed = self { return true }
+            return false
+        }
+
+        var message: String {
+            switch self {
+            case .allowed(let warning):
+                return warning ?? "Command allowed"
+            case .denied(let reason):
+                return reason
+            }
+        }
+    }
+
     // MARK: - Private Methods
 
     private func resolveClaudeExecutableURL() throws -> URL {
@@ -227,7 +350,60 @@ actor ClaudeService {
         Current date and time: \(formattedDateTime(now()))
         """
 
+        // Build context access summary - explicitly state what IS and ISN'T available
+        prompt += "\n\n## Your Context Access:"
+
         if let context {
+            // Calendar status
+            if context.todayEvents.isEmpty {
+                prompt += "\n- Calendar: No events today ✓"
+            } else {
+                prompt += "\n- Calendar: \(context.todayEvents.count) event\(context.todayEvents.count == 1 ? "" : "s") today ✓"
+            }
+
+            // Reminders status
+            if context.upcomingReminders.isEmpty {
+                prompt += "\n- Reminders: No pending reminders ✓"
+            } else {
+                prompt += "\n- Reminders: \(context.upcomingReminders.count) pending ✓"
+            }
+
+            // Goals status
+            if let planning = context.planningContext {
+                let incompleteGoals = planning.todaysGoals.filter { !$0.isCompleted }.count
+                if planning.todaysGoals.isEmpty {
+                    prompt += "\n- Goals: No goals set for today ✓"
+                } else if incompleteGoals == 0 {
+                    prompt += "\n- Goals: All \(planning.todaysGoals.count) goals completed ✓"
+                } else {
+                    prompt += "\n- Goals: \(incompleteGoals) of \(planning.todaysGoals.count) incomplete ✓"
+                }
+                if planning.overdueCount > 0 {
+                    prompt += "\n- Overdue: \(planning.overdueCount) overdue goal\(planning.overdueCount == 1 ? "" : "s")"
+                }
+            } else {
+                prompt += "\n- Goals: Not enabled"
+            }
+
+            // Email status
+            if let email = context.emailContext {
+                if email.unreadCount == 0 {
+                    prompt += "\n- Email: No unread emails ✓"
+                } else {
+                    prompt += "\n- Email: \(email.unreadCount) unread ✓"
+                }
+            } else {
+                prompt += "\n- Email: Not enabled (user preference)"
+            }
+
+            // Notes status
+            if context.recentNotes.isEmpty {
+                prompt += "\n- Notes: No recent notes"
+            } else {
+                prompt += "\n- Notes: \(context.recentNotes.count) recent ✓"
+            }
+
+            // Now output the actual data
             if !context.todayEvents.isEmpty {
                 prompt += "\n\n## Today's Calendar:\n"
                 for event in context.todayEvents {
@@ -250,12 +426,35 @@ actor ClaudeService {
                 }
             }
 
+            if let planning = context.planningContext, !planning.todaysGoals.isEmpty {
+                prompt += "\n\n## Today's Goals:\n"
+                for goal in planning.todaysGoals {
+                    let status = goal.isCompleted ? "✓" : "○"
+                    prompt += "- \(status) \(goal.text)\n"
+                }
+            }
+
             if !context.recentNotes.isEmpty {
                 prompt += "\n\n## Recent Notes:\n"
                 for note in context.recentNotes {
                     prompt += "- \(note)\n"
                 }
             }
+
+            if let email = context.emailContext, !email.importantEmails.isEmpty {
+                prompt += "\n\n## Important Emails:\n"
+                for emailItem in email.importantEmails {
+                    let readStatus = emailItem.isRead ? "" : " (unread)"
+                    prompt += "- From \(emailItem.sender): \(emailItem.subject)\(readStatus)\n"
+                }
+            }
+        } else {
+            // No context available at all
+            prompt += "\n- Calendar: Not connected"
+            prompt += "\n- Reminders: Not connected"
+            prompt += "\n- Goals: Not connected"
+            prompt += "\n- Email: Not connected"
+            prompt += "\n- Notes: Not connected"
         }
 
         // Claude CLI maintains conversation context via --resume; history is currently unused.
@@ -270,6 +469,59 @@ actor ClaudeService {
         formatter.dateFormat = "EEEE, MMMM d, yyyy 'at' h:mm a"
         return formatter.string(from: date)
     }
+}
+
+// MARK: - Command Security
+
+/// Validates a command and returns whether it should be allowed
+/// This is a standalone function for use outside the ClaudeService actor
+func validateCommandSecurity(_ command: String) -> (allowed: Bool, reason: String) {
+    let allowlistEnabled = (try? Database.shared.getPreference(key: "command_allowlist_enabled")) != "false"
+
+    let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+        return (false, "Empty command")
+    }
+
+    let components = trimmed.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+    guard let baseCommand = components.first else {
+        return (false, "Invalid command format")
+    }
+
+    let commandName = (baseCommand as NSString).lastPathComponent
+
+    // Always block dangerous commands
+    if ClaudeService.blockedCommands.contains(commandName) {
+        return (false, "Command '\(commandName)' is blocked for security")
+    }
+
+    // Check for shell injection patterns
+    let dangerousPatterns = ["$(", "`", "&&", "||", ";", "|", ">", ">>", "<", "${"]
+    for pattern in dangerousPatterns {
+        if trimmed.contains(pattern) {
+            return (false, "Command contains potentially unsafe patterns")
+        }
+    }
+
+    // If allowlist is disabled, allow
+    guard allowlistEnabled else {
+        return (true, "Command allowlist disabled")
+    }
+
+    // Check if command is in allowlist
+    if ClaudeService.allowedCommands.contains(commandName) {
+        if commandName == "git" && components.count > 1 {
+            let gitSubcommand = components[1]
+            if ClaudeService.allowedGitSubcommands.contains(gitSubcommand) {
+                return (true, "Allowed")
+            } else {
+                return (false, "Git subcommand '\(gitSubcommand)' is not in allowlist")
+            }
+        }
+        return (true, "Allowed")
+    }
+
+    return (false, "Command '\(commandName)' is not in allowlist")
 }
 
 // MARK: - Errors
