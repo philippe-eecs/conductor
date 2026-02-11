@@ -37,15 +37,20 @@ final class EventScheduler {
 
     /// Returns current scheduler state for UI display
     func getSchedulerState() -> SchedulerState {
+        let snapshot = perform {
+            (nextScheduledEvent, scheduledJobs, triggeredJobsToday)
+        }
+        let (nextEvent, jobs, triggered) = snapshot
+
         var state = SchedulerState()
-        state.nextEvent = nextScheduledEvent
+        state.nextEvent = nextEvent
 
         // Build today's job statuses
         let now = Date()
-        state.todaysJobs = scheduledJobs.compactMap { job -> SchedulerState.JobStatus? in
+        state.todaysJobs = jobs.compactMap { job -> SchedulerState.JobStatus? in
             guard case .daily = job.schedule else { return nil }
 
-            let completed = triggeredJobsToday.contains(job.id)
+            let completed = triggered.contains(job.id)
             let nextRun = job.nextRunDate(after: now)
 
             return SchedulerState.JobStatus(
@@ -57,7 +62,7 @@ final class EventScheduler {
         }
 
         // Build upcoming jobs (non-daily)
-        state.upcomingJobs = scheduledJobs.compactMap { job -> SchedulerState.JobStatus? in
+        state.upcomingJobs = jobs.compactMap { job -> SchedulerState.JobStatus? in
             switch job.schedule {
             case .daily:
                 return nil // Already in todaysJobs
@@ -75,9 +80,34 @@ final class EventScheduler {
         return state
     }
 
+    @discardableResult
+    func runJobNow(id: String, force: Bool = false) -> Bool {
+        let jobToRun: ScheduledJob? = perform {
+            guard let job = scheduledJobs.first(where: { $0.id == id }) else { return nil }
+            if triggeredJobsToday.contains(job.id), !force {
+                return nil
+            }
+            triggeredJobsToday.insert(job.id)
+            return job
+        }
+
+        guard let jobToRun else { return false }
+
+        Task {
+            await MainActor.run {
+                AppState.shared.logActivity(.scheduler, "Manual run: \(jobToRun.name)")
+            }
+            await jobToRun.action()
+            recalculateNextEvent()
+        }
+
+        return true
+    }
+
     /// Returns upcoming meeting warnings for today
     func getTodayMeetingWarnings() -> [SchedulerState.MeetingWarning] {
-        perform {
+        guard canReadCalendarEvents() else { return [] }
+        return perform {
             let calendar = Calendar.current
             let now = Date()
             let endOfDay = calendar.date(bySettingHour: 23, minute: 59, second: 59, of: now)!
@@ -166,52 +196,13 @@ final class EventScheduler {
 
     private func setupScheduledJobs() {
         scheduledJobs = [
-            // Morning Brief - default 8:00 AM
+            // Daily Brief - default 8:00 AM
             ScheduledJob(
                 id: "morning_brief",
-                name: "Morning Brief",
+                name: "Daily Brief",
                 schedule: .daily(hour: 8, minute: 0),
                 preferenceHourKey: "morning_brief_hour",
                 action: { await self.triggerMorningBrief() }
-            ),
-
-            // Mid-morning Check-in - 10:30 AM
-            ScheduledJob(
-                id: "midmorning_checkin",
-                name: "Mid-morning Check-in",
-                schedule: .daily(hour: 10, minute: 30),
-                preferenceHourKey: "midmorning_checkin_hour",
-                preferenceMinuteKey: "midmorning_checkin_minute",
-                action: { await self.triggerMidMorningCheckin() }
-            ),
-
-            // Afternoon Check-in - 1:30 PM
-            ScheduledJob(
-                id: "afternoon_checkin",
-                name: "Afternoon Check-in",
-                schedule: .daily(hour: 13, minute: 30),
-                preferenceHourKey: "afternoon_checkin_hour",
-                preferenceMinuteKey: "afternoon_checkin_minute",
-                action: { await self.triggerAfternoonCheckin() }
-            ),
-
-            // Wind-down Check-in - 4:30 PM
-            ScheduledJob(
-                id: "winddown_checkin",
-                name: "Wind-down Check-in",
-                schedule: .daily(hour: 16, minute: 30),
-                preferenceHourKey: "winddown_checkin_hour",
-                preferenceMinuteKey: "winddown_checkin_minute",
-                action: { await self.triggerWinddownCheckin() }
-            ),
-
-            // Evening Shutdown - default 6:00 PM
-            ScheduledJob(
-                id: "evening_shutdown",
-                name: "Evening Shutdown",
-                schedule: .daily(hour: 18, minute: 0),
-                preferenceHourKey: "evening_brief_hour",
-                action: { await self.triggerEveningShutdown() }
             ),
 
             // Weekly Review - Monday 8:30 AM
@@ -230,6 +221,21 @@ final class EventScheduler {
                 action: { await self.triggerMonthlyReview() }
             )
         ]
+    }
+
+    private func canReadCalendarEvents() -> Bool {
+        let status = EKEventStore.authorizationStatus(for: .event)
+        if #available(macOS 14.0, *) {
+            return status == .fullAccess
+        }
+        switch status {
+        case .authorized, .fullAccess:
+            return true
+        case .notDetermined, .restricted, .denied, .writeOnly:
+            return false
+        @unknown default:
+            return false
+        }
     }
 
     // MARK: - Smart Scheduling
@@ -280,6 +286,7 @@ final class EventScheduler {
     }
 
     private func getMeetingWarnings() -> [(date: Date, event: ScheduledEvent)]? {
+        guard canReadCalendarEvents() else { return nil }
         let calendar = Calendar.current
         let now = Date()
         let endOfDay = calendar.date(bySettingHour: 23, minute: 59, second: 59, of: now)!
@@ -351,25 +358,24 @@ final class EventScheduler {
     }
 
     private func handleScheduledEvent(_ event: ScheduledEvent) {
-        Task {
-            switch event {
-            case .meetingWarning(let ekEvent, let minutes):
+        switch event {
+        case .meetingWarning(let ekEvent, let minutes):
+            Task {
                 await handleMeetingWarning(ekEvent, minutes: minutes)
+                recalculateNextEvent()
+            }
 
-            case .job(let job):
-                // Mark as triggered to avoid duplicates
-                triggeredJobsToday.insert(job.id)
-
-                // Log to activity
+        case .job(let job):
+            perform {
+                _ = triggeredJobsToday.insert(job.id)
+            }
+            Task {
                 await MainActor.run {
                     AppState.shared.logActivity(.scheduler, "Running: \(job.name)")
                 }
-
                 await job.action()
+                recalculateNextEvent()
             }
-
-            // Recalculate next event
-            recalculateNextEvent()
         }
     }
 
@@ -412,7 +418,15 @@ final class EventScheduler {
     private func triggerMorningBrief() async {
         // Check if planning is enabled
         guard (try? Database.shared.getPreference(key: "planning_enabled")) != "false" else { return }
+        // Check if this specific check-in is enabled
+        guard (try? Database.shared.getPreference(key: "morning_brief_enabled")) != "false" else { return }
         guard !LocalRuleEngine.shared.isQuietHours() else { return }
+
+        let notificationType = CheckinNotificationType(
+            rawValue: (try? Database.shared.getPreference(key: "morning_brief_notification_type")) ?? "notification"
+        ) ?? .notification
+
+        guard notificationType != .none else { return }
 
         let alert = ProactiveAlert(
             title: "Good morning!",
@@ -422,34 +436,12 @@ final class EventScheduler {
         )
 
         if FatigueManager.shared.shouldShow(alert: alert) {
-            await ProactiveEngine.shared.sendNotificationPublic(alert)
+            await sendCheckinNotification(alert: alert, type: notificationType)
             FatigueManager.shared.recordShown(alert: alert)
         }
-    }
 
-    private func triggerEveningShutdown() async {
-        guard (try? Database.shared.getPreference(key: "planning_enabled")) != "false" else { return }
-        guard !LocalRuleEngine.shared.isQuietHours() else { return }
-
-        // Check if user is in a meeting
-        let events = await EventKitManager.shared.getTodayEvents()
-        guard !LocalRuleEngine.shared.isInMeeting(events: events) else {
-            // Reschedule for 30 minutes later
-            print("User in meeting, deferring evening shutdown")
-            return
-        }
-
-        let alert = ProactiveAlert(
-            title: "Time for daily shutdown",
-            body: "Review your progress and plan for tomorrow.",
-            category: .briefing,
-            priority: .medium
-        )
-
-        if FatigueManager.shared.shouldShow(alert: alert) {
-            await ProactiveEngine.shared.sendNotificationPublic(alert)
-            FatigueManager.shared.recordShown(alert: alert)
-        }
+        // Run agent tasks for this phase
+        AgentTaskScheduler.shared.runCheckinTasks(phase: "morning")
     }
 
     private func triggerWeeklyReview() async {
@@ -484,115 +476,43 @@ final class EventScheduler {
         }
     }
 
-    // MARK: - Check-in Prompts
-
-    private func triggerMidMorningCheckin() async {
-        guard (try? Database.shared.getPreference(key: "checkins_enabled")) != "false" else { return }
-        guard !LocalRuleEngine.shared.isQuietHours() else { return }
-
-        // Check if user is in a meeting
-        let events = await EventKitManager.shared.getTodayEvents()
-        guard !LocalRuleEngine.shared.isInMeeting(events: events) else { return }
-
-        // Get top goal for context
-        let today = DailyPlanningService.todayDateString
-        let goals = (try? Database.shared.getGoalsForDate(today)) ?? []
-        let topGoal = goals.first { !$0.isCompleted }
-
-        let body: String
-        if let goal = topGoal {
-            body = "Quick check-in: How's \"\(goal.goalText)\" going?"
-        } else {
-            body = "Quick check-in: How's your morning going so far?"
-        }
-
-        let alert = ProactiveAlert(
-            title: "Mid-morning check",
-            body: body,
-            category: .suggestion,
-            priority: .low
-        )
-
-        if FatigueManager.shared.shouldShow(alert: alert) {
-            await NotificationManager.shared.sendActionableNotification(alert)
-            FatigueManager.shared.recordShown(alert: alert)
-        }
-    }
-
-    private func triggerAfternoonCheckin() async {
-        guard (try? Database.shared.getPreference(key: "checkins_enabled")) != "false" else { return }
-        guard !LocalRuleEngine.shared.isQuietHours() else { return }
-
-        let events = await EventKitManager.shared.getTodayEvents()
-        guard !LocalRuleEngine.shared.isInMeeting(events: events) else { return }
-
-        // Get pending tasks count
-        let today = DailyPlanningService.todayDateString
-        let goals = (try? Database.shared.getGoalsForDate(today)) ?? []
-        let pendingCount = goals.filter { !$0.isCompleted }.count
-
-        let body: String
-        if pendingCount > 0 {
-            body = "Afternoon check: \(pendingCount) item\(pendingCount == 1 ? "" : "s") still pending. Focus on any?"
-        } else {
-            body = "Afternoon check: Great progress! Any new priorities?"
-        }
-
-        let alert = ProactiveAlert(
-            title: "Afternoon check",
-            body: body,
-            category: .suggestion,
-            priority: .low
-        )
-
-        if FatigueManager.shared.shouldShow(alert: alert) {
-            await NotificationManager.shared.sendActionableNotification(alert)
-            FatigueManager.shared.recordShown(alert: alert)
-        }
-    }
-
-    private func triggerWinddownCheckin() async {
-        guard (try? Database.shared.getPreference(key: "checkins_enabled")) != "false" else { return }
-        guard !LocalRuleEngine.shared.isQuietHours() else { return }
-
-        let events = await EventKitManager.shared.getTodayEvents()
-        guard !LocalRuleEngine.shared.isInMeeting(events: events) else { return }
-
-        // Get today's progress
-        let today = DailyPlanningService.todayDateString
-        let goals = (try? Database.shared.getGoalsForDate(today)) ?? []
-        let completedCount = goals.filter { $0.isCompleted }.count
-        let totalCount = goals.count
-
-        let body: String
-        if totalCount > 0 {
-            if completedCount == totalCount {
-                body = "Day's winding down. All \(totalCount) goals complete! Ready to wrap up?"
-            } else {
-                body = "Day's winding down. \(completedCount)/\(totalCount) complete. Want to review progress?"
-            }
-        } else {
-            body = "Day's winding down. Want to review your progress?"
-        }
-
-        let alert = ProactiveAlert(
-            title: "Wind-down time",
-            body: body,
-            category: .suggestion,
-            priority: .low
-        )
-
-        if FatigueManager.shared.shouldShow(alert: alert) {
-            await NotificationManager.shared.sendActionableNotification(alert)
-            FatigueManager.shared.recordShown(alert: alert)
-        }
-    }
-
     // MARK: - Helpers
 
     private func formatDate(_ date: Date) -> String {
         SharedDateFormatters.time12Hour.string(from: date)
     }
+
+    /// Sends a check-in notification based on the configured notification type
+    private func sendCheckinNotification(alert: ProactiveAlert, type: CheckinNotificationType) async {
+        switch type {
+        case .notification:
+            await NotificationManager.shared.sendActionableNotification(alert)
+        case .voice:
+            await speakNotification(alert)
+        case .both:
+            await NotificationManager.shared.sendActionableNotification(alert)
+            await speakNotification(alert)
+        case .none:
+            break
+        }
+    }
+
+    /// Speaks the notification using text-to-speech
+    private func speakNotification(_ alert: ProactiveAlert) async {
+        await MainActor.run {
+            let message = "\(alert.title). \(alert.body)"
+            SpeechManager.shared.speak(message)
+        }
+    }
+}
+
+// MARK: - Check-in Notification Type
+
+enum CheckinNotificationType: String {
+    case notification = "notification"
+    case voice = "voice"
+    case both = "both"
+    case none = "none"
 }
 
 // MARK: - Supporting Types

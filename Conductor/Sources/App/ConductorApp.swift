@@ -6,116 +6,17 @@ struct ConductorApp: App {
     @StateObject private var appState = AppState.shared
 
     var body: some Scene {
-        // Main window shown when clicking menu bar icon
-        MenuBarExtra {
-            ConductorView()
-                .environmentObject(appState)
-        } label: {
-            HStack(spacing: 2) {
-                Image(systemName: "brain")
-                if appState.showPlanningNotificationBadge {
-                    Circle()
-                        .fill(.red)
-                        .frame(width: 6, height: 6)
-                }
-            }
-        }
-        .menuBarExtraStyle(.window)
-
-        // Right-click menu
-        MenuBarExtra {
-            menuContent
-        } label: {
-            EmptyView() // Hidden, shares the brain icon
-        }
-        .menuBarExtraStyle(.menu)
-
         Settings {
             SettingsView()
                 .environmentObject(appState)
         }
-    }
-
-    @ViewBuilder
-    private var menuContent: some View {
-        // Status section
-        Section {
-            statusMenuItem
-        }
-
-        Divider()
-
-        // Quick actions
-        Section {
-            Button("Open Conductor") {
-                AppDelegate.toggleConductorWindow()
-            }
-            .keyboardShortcut("o")
-
-            Button("Daily Planning...") {
-                NotificationCenter.default.post(name: .showPlanningView, object: nil)
-            }
-            .keyboardShortcut("p")
-
-            Button("New Conversation") {
-                appState.startNewConversation()
-            }
-            .keyboardShortcut("n")
-        }
-
-        Divider()
-
-        // Settings & Quit
-        Section {
-            SettingsLink {
-                Text("Settings...")
-            }
-            .keyboardShortcut(",")
-
-            Divider()
-
-            Button("Quit Conductor") {
-                NSApplication.shared.terminate(nil)
-            }
-            .keyboardShortcut("q")
-        }
-    }
-
-    private var statusMenuItem: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Circle()
-                    .fill(appState.cliAvailable ? .green : .red)
-                    .frame(width: 8, height: 8)
-                Text(appState.cliAvailable ? "Claude CLI Ready" : "Claude CLI Not Found")
-                    .font(.caption)
-            }
-
-            if appState.calendarAccessGranted || appState.remindersAccessGranted {
-                HStack {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.green)
-                        .font(.caption2)
-                    Text(permissionsSummary)
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                }
-            }
-        }
-        .padding(.vertical, 4)
-    }
-
-    private var permissionsSummary: String {
-        var parts: [String] = []
-        if appState.calendarAccessGranted { parts.append("Calendar") }
-        if appState.remindersAccessGranted { parts.append("Reminders") }
-        return parts.joined(separator: ", ")
     }
 }
 
 // Notification names for cross-component communication
 extension Notification.Name {
     static let showPlanningView = Notification.Name("showPlanningView")
+    static let mcpToolCalled = Notification.Name("mcpToolCalled")
 }
 
 @MainActor
@@ -149,6 +50,10 @@ class AppState: ObservableObject {
     // Activity log for transparency
     @Published var recentActivity: [ActivityLogEntry] = []
 
+    // Agent task approval
+    @Published var pendingApprovalCount: Int = 0
+    @Published var pendingActions: [AssistantActionRequest] = []
+
     private let claudeService = ClaudeService.shared
     private let planningService = DailyPlanningService.shared
 
@@ -164,6 +69,27 @@ class AppState: ObservableObject {
 
         // Check current permission states
         refreshPermissionStates()
+
+        // Start in-process MCP server for context tools
+        MCPServer.shared.start()
+
+        // Start agent task scheduler
+        AgentTaskScheduler.shared.start()
+
+        // Observe MCP tool call notifications for activity logging
+        NotificationCenter.default.addObserver(
+            forName: .mcpToolCalled,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self,
+                  let info = notification.userInfo,
+                  let toolName = info["toolName"] as? String else { return }
+            let args = info["arguments"] as? String ?? ""
+            Task { @MainActor in
+                self.logActivity(.context, "MCP tool called: \(toolName)", metadata: ["Tool": toolName, "Args": String(args.prefix(200))])
+            }
+        }
 
         // Load data asynchronously to avoid blocking main thread
         Task {
@@ -219,8 +145,11 @@ class AppState: ObservableObject {
     }
 
     func refreshPermissionStates() {
-        calendarAccessGranted = EventKitManager.shared.calendarAuthorizationStatus() == .fullAccess
-        remindersAccessGranted = EventKitManager.shared.remindersAuthorizationStatus() == .fullAccess
+        let calendarStatus = EventKitManager.shared.calendarAuthorizationStatus()
+        calendarAccessGranted = calendarStatus == .fullAccess || calendarStatus == .writeOnly
+
+        let remindersStatus = EventKitManager.shared.remindersAuthorizationStatus()
+        remindersAccessGranted = remindersStatus == .fullAccess || remindersStatus == .writeOnly
     }
 
     func completeSetup() {
@@ -237,7 +166,7 @@ class AppState: ObservableObject {
         Task.detached(priority: .utility) {
             try? Database.shared.setPreference(key: "tools_enabled", value: enabled ? "true" : "false")
         }
-        logActivity(.system, enabled ? "Tools enabled" : "Tools disabled")
+        logActivity(.system, enabled ? "Insecure mode enabled" : "Insecure mode disabled")
     }
 
     func checkCLIStatus() async {
@@ -285,9 +214,9 @@ class AppState: ObservableObject {
         }
     }
 
+    /// Sends a message to Claude. Context is fetched on-demand via MCP tools.
     func sendMessage(_ content: String) async {
         let userMessage = ChatMessage(role: .user, content: content)
-
         messages.append(userMessage)
         isLoading = true
 
@@ -297,44 +226,75 @@ class AppState: ObservableObject {
             try? Database.shared.saveMessage(userMessage, forSession: sessionId)
         }
 
+        // Ensure MCP server is running
+        if !MCPServer.shared.isRunning {
+            MCPServer.shared.start()
+        }
+
         do {
-            // Build context off the main actor
-            let context = await Task.detached(priority: .userInitiated) {
-                await ContextBuilder.shared.buildContext()
+            let chatModel = await Task.detached(priority: .utility) {
+                (((try? Database.shared.getPreference(key: "claude_chat_model")) ?? nil) ?? "opus")
             }.value
 
-            // Create message context for display
-            let messageContext = MessageContext.from(context)
-
-            // Log context usage
-            logContextUsage(context)
-
-            let chatModel = await Task.detached(priority: .utility) {
-                (((try? Database.shared.getPreference(key: "claude_chat_model")) ?? nil) ?? "sonnet")
+            let permissionMode = await Task.detached(priority: .utility) {
+                (((try? Database.shared.getPreference(key: "claude_permission_mode")) ?? nil) ?? "plan")
             }.value
 
             let response = try await claudeService.sendMessage(
                 content,
-                context: context,
                 history: messages,
                 toolsEnabled: toolsEnabled,
-                modelOverride: chatModel
+                modelOverride: chatModel,
+                permissionModeOverride: permissionMode
             )
 
-            // Create assistant message with context metadata
+            // Parse actions from response
+            let parseResult = ActionParser.extractActions(from: response.result)
+            let displayText = parseResult.cleanText.isEmpty ? response.result : parseResult.cleanText
+
             let assistantMessage = ChatMessage(
                 role: .assistant,
-                content: response.result,
-                contextUsed: messageContext,
-                cost: response.totalCostUsd
+                content: displayText,
+                cost: response.totalCostUsd,
+                model: response.model,
+                toolCalls: response.toolCalls
             )
 
             messages.append(assistantMessage)
+
+            // Handle parsed actions
+            if !parseResult.actions.isEmpty {
+                for action in parseResult.actions {
+                    let isSafe = ActionExecutor.safeActionTypes.contains(action.type)
+                        && !action.requiresUserApproval
+                    if isSafe {
+                        Task {
+                            let _ = await ActionExecutor.shared.execute(action)
+                        }
+                    } else {
+                        pendingActions.append(action)
+                        pendingApprovalCount += 1
+                    }
+                }
+            }
+
             isLoading = false
+
+            // Speak response if voice is enabled
+            SpeechManager.shared.speak(displayText)
 
             // Update session ID if we got one
             if let newSessionId = response.sessionId {
                 currentSessionId = newSessionId
+            }
+
+            // Log tool calls to activity
+            if let toolCalls = response.toolCalls {
+                for tool in toolCalls {
+                    var toolMeta: [String: String] = ["Tool": tool.displayName]
+                    if let input = tool.input { toolMeta["Input"] = String(input.prefix(200)) }
+                    logActivity(.context, "Tool called: \(tool.displayName)", metadata: toolMeta)
+                }
             }
 
             // Persist session metadata and cost
@@ -354,13 +314,15 @@ class AppState: ObservableObject {
             loadCostData()
             loadSessions()
 
-            // Log the interaction with detailed metadata
+            // Log the interaction
             var logMetadata: [String: String] = [:]
-            logMetadata["Context"] = messageContext.summary
             if let cost = costToLog {
                 logMetadata["Cost"] = String(format: "$%.4f", cost)
-                logActivity(.ai, "Response generated", metadata: logMetadata)
             }
+            if let model = response.model {
+                logMetadata["Model"] = model
+            }
+            logActivity(.ai, "Response generated", metadata: logMetadata)
 
             // Save assistant message in background
             let finalSessionId = currentSessionId
@@ -373,28 +335,6 @@ class AppState: ObservableObject {
             messages.append(errorMessage)
             isLoading = false
             logActivity(.error, "Request failed: \(error.localizedDescription)")
-        }
-    }
-
-    private func logContextUsage(_ context: ContextData) {
-        var parts: [String] = []
-        if !context.todayEvents.isEmpty {
-            parts.append("\(context.todayEvents.count) events")
-        }
-        if !context.upcomingReminders.isEmpty {
-            parts.append("\(context.upcomingReminders.count) reminders")
-        }
-        if let planning = context.planningContext {
-            if !planning.todaysGoals.isEmpty {
-                parts.append("\(planning.todaysGoals.count) goals")
-            }
-        }
-        if let email = context.emailContext, email.unreadCount > 0 {
-            parts.append("\(email.unreadCount) emails")
-        }
-
-        if !parts.isEmpty {
-            logActivity(.context, "Using: " + parts.joined(separator: ", "))
         }
     }
 
@@ -449,6 +389,41 @@ class AppState: ObservableObject {
 
         if currentSessionId == session.id {
             startNewConversation()
+        }
+    }
+
+    // MARK: - Action Approval
+
+    func approveAction(_ action: AssistantActionRequest) {
+        pendingActions.removeAll { $0.id == action.id }
+        pendingApprovalCount = max(0, pendingApprovalCount - 1)
+        Task {
+            let success = await ActionExecutor.shared.execute(action)
+            logActivity(.system, success ? "Action approved: \(action.title)" : "Action failed: \(action.title)")
+        }
+        Task.detached(priority: .utility) {
+            try? Database.shared.recordBehaviorEvent(type: .actionApproved, entityId: action.id)
+        }
+    }
+
+    func rejectAction(_ action: AssistantActionRequest) {
+        pendingActions.removeAll { $0.id == action.id }
+        pendingApprovalCount = max(0, pendingApprovalCount - 1)
+        logActivity(.system, "Action rejected: \(action.title)")
+        Task.detached(priority: .utility) {
+            try? Database.shared.recordBehaviorEvent(type: .actionRejected, entityId: action.id)
+        }
+    }
+
+    func approveAllActions() {
+        let actions = pendingActions
+        pendingActions.removeAll()
+        pendingApprovalCount = 0
+        for action in actions {
+            Task {
+                let success = await ActionExecutor.shared.execute(action)
+                logActivity(.system, success ? "Action approved: \(action.title)" : "Action failed: \(action.title)")
+            }
         }
     }
 

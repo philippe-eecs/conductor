@@ -214,6 +214,59 @@ final class MailService {
         )
     }
 
+    // MARK: - Send Email
+
+    /// Creates an outgoing email in Mail.app with visible: true so the user can review before sending.
+    func sendEmail(to: String, subject: String, body: String, cc: String? = nil) async -> Bool {
+        var script = """
+        tell application "Mail"
+            set newMessage to make new outgoing message with properties {subject:"\(escapeAppleScript(subject))", content:"\(escapeAppleScript(body))", visible:true}
+            tell newMessage
+                make new to recipient at end of to recipients with properties {address:"\(escapeAppleScript(to))"}
+        """
+
+        if let cc, !cc.isEmpty {
+            script += """
+
+                make new cc recipient at end of cc recipients with properties {address:"\(escapeAppleScript(cc))"}
+            """
+        }
+
+        script += """
+
+            end tell
+            activate
+        end tell
+        """
+
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                guard let appleScript = NSAppleScript(source: script) else {
+                    continuation.resume(returning: false)
+                    return
+                }
+                var error: NSDictionary?
+                appleScript.executeAndReturnError(&error)
+                if let error {
+                    print("MailService sendEmail error: \(error)")
+                    continuation.resume(returning: false)
+                } else {
+                    print("MailService: Email draft created for \(to)")
+                    continuation.resume(returning: true)
+                }
+            }
+        }
+    }
+
+    /// Escapes special characters for AppleScript string literals
+    private func escapeAppleScript(_ string: String) -> String {
+        string
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
+    }
+
     // MARK: - Private
 
     private func executeMailQuery(script: String, mailbox: String) async -> [EmailSummary] {

@@ -7,8 +7,18 @@ struct ActivityTabView: View {
     @State private var selectedFilter: ActivityFilter = .all
     @State private var searchText: String = ""
 
+    /// Whether to show pending approvals section at top
+    var showPendingApprovals: Bool = false
+
     var body: some View {
         VStack(spacing: 0) {
+            // Pending approvals section (when merged from Queue tab)
+            if showPendingApprovals && !appState.pendingActions.isEmpty {
+                pendingApprovalsSection
+
+                Divider()
+            }
+
             // Filter bar
             filterBar
 
@@ -28,6 +38,37 @@ struct ActivityTabView: View {
                 .padding(12)
             }
         }
+    }
+
+    // MARK: - Pending Approvals
+
+    private var pendingApprovalsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "exclamationmark.circle.fill")
+                    .foregroundColor(.orange)
+                Text("Pending Approvals")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                Spacer()
+                Text("\(appState.pendingActions.count)")
+                    .font(.caption)
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.orange)
+                    .cornerRadius(8)
+            }
+
+            ActionApprovalView(
+                actions: appState.pendingActions,
+                onApprove: { appState.approveAction($0) },
+                onReject: { appState.rejectAction($0) },
+                onApproveAll: { appState.approveAllActions() }
+            )
+        }
+        .padding(12)
+        .background(Color.orange.opacity(0.05))
     }
 
     // MARK: - Filter Bar

@@ -18,6 +18,10 @@ final class NotificationManager: NSObject {
 
     private override init() {
         super.init()
+        guard RuntimeEnvironment.supportsUserNotifications else {
+            NSLog("NotificationManager disabled (not running inside a .app bundle).")
+            return
+        }
         setupNotificationCategories()
         UNUserNotificationCenter.current().delegate = self
     }
@@ -81,6 +85,12 @@ final class NotificationManager: NSObject {
 
     /// Sends an actionable notification with Respond/Snooze/Dismiss buttons
     func sendActionableNotification(_ alert: ProactiveAlert) async {
+        guard RuntimeEnvironment.supportsUserNotifications else {
+            await MainActor.run {
+                AppState.shared.logActivity(.scheduler, "Notifications unavailable; skipped: \(alert.title)")
+            }
+            return
+        }
         let content = UNMutableNotificationContent()
         content.title = alert.title
         content.body = alert.body
@@ -122,6 +132,7 @@ final class NotificationManager: NSObject {
 
     /// Schedules a snoozed notification
     func snoozeNotification(_ alert: ProactiveAlert, minutes: Int = 15) async {
+        guard RuntimeEnvironment.supportsUserNotifications else { return }
         let content = UNMutableNotificationContent()
         content.title = alert.title
         content.body = alert.body + " (snoozed)"
@@ -156,6 +167,7 @@ final class NotificationManager: NSObject {
 
     /// Schedules a pre-meeting notification
     func scheduleMeetingPrep(for event: EventKitManager.CalendarEvent, minutesBefore: Int = 15) async {
+        guard RuntimeEnvironment.supportsUserNotifications else { return }
         let alertTime = event.startDate.addingTimeInterval(-Double(minutesBefore * 60))
 
         // Don't schedule if already past
@@ -205,7 +217,7 @@ extension NotificationManager: UNUserNotificationCenterDelegate {
         case Self.respondAction, UNNotificationDefaultActionIdentifier:
             // Open Conductor and focus chat
             DispatchQueue.main.async {
-                NSApp.activate(ignoringOtherApps: true)
+                MainWindowController.shared.showWindow(appState: AppState.shared)
 
                 // If there's a prompt body, we could pre-fill the chat
                 if let body = userInfo["alert_body"] as? String {

@@ -3,14 +3,14 @@ import AppKit
 
 enum ConductorTab: String, CaseIterable {
     case chat = "Chat"
-    case todo = "TODO"
+    case focus = "Focus"
     case schedule = "Schedule"
     case activity = "Activity"
 
     var icon: String {
         switch self {
         case .chat: return "bubble.left.and.bubble.right"
-        case .todo: return "checklist"
+        case .focus: return "target"
         case .schedule: return "calendar"
         case .activity: return "chart.bar"
         }
@@ -19,10 +19,12 @@ enum ConductorTab: String, CaseIterable {
 
 struct ConductorView: View {
     @EnvironmentObject var appState: AppState
+    @ObservedObject private var speechManager = SpeechManager.shared
     @State private var inputText: String = ""
     @State private var showSettings: Bool = false
     @State private var showSessions: Bool = false
     @State private var showPlanning: Bool = false
+    @State private var showBriefing: Bool = false
     @State private var selectedTab: ConductorTab = .chat
     @FocusState private var isInputFocused: Bool
 
@@ -64,7 +66,7 @@ struct ConductorView: View {
                 inputView
             }
         }
-        .frame(width: 400, height: 500)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(NSColor.windowBackgroundColor))
         .sheet(isPresented: $showSettings) {
             SettingsView()
@@ -77,8 +79,21 @@ struct ConductorView: View {
         .sheet(isPresented: $showPlanning) {
             DailyPlanningView()
         }
+        .sheet(isPresented: $showBriefing) {
+            MorningBriefingView()
+        }
         .onAppear {
             isInputFocused = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .prepareEmailResponse)) { notification in
+            if let text = notification.userInfo?["text"] as? String {
+                selectedTab = .chat
+                inputText = text
+                isInputFocused = true
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .showPlanningView)) { _ in
+            showPlanning = true
         }
     }
 
@@ -105,12 +120,15 @@ struct ConductorView: View {
         switch tab {
         case .chat:
             return 0
-        case .todo:
+        case .focus:
             return (try? Database.shared.getTodayTasks(includeCompleted: false).count) ?? 0
         case .schedule:
             return 0
         case .activity:
-            return appState.recentActivity.filter { $0.type == .error }.count
+            // Show pending approvals + errors
+            let approvals = appState.pendingApprovalCount
+            let errors = appState.recentActivity.filter { $0.type == .error }.count
+            return approvals + errors
         }
     }
 
@@ -121,12 +139,12 @@ struct ConductorView: View {
         switch selectedTab {
         case .chat:
             messagesView
-        case .todo:
+        case .focus:
             TodoListView()
         case .schedule:
             ScheduleTabView()
         case .activity:
-            ActivityTabView()
+            ActivityTabView(showPendingApprovals: true)
                 .environmentObject(appState)
         }
     }
@@ -134,7 +152,7 @@ struct ConductorView: View {
     // MARK: - Header
 
     private var headerView: some View {
-        HStack {
+        HStack(spacing: 8) {
             Image(systemName: "brain")
                 .foregroundColor(.accentColor)
             Text("Conductor")
@@ -152,44 +170,81 @@ struct ConductorView: View {
 
             Spacer()
 
-            // Planning button
-            Button(action: { showPlanning = true }) {
-                Image(systemName: "calendar.badge.clock")
+            // Stop speech button (shown when speaking)
+            if speechManager.isSpeaking {
+                Button(action: { speechManager.stop() }) {
+                    Image(systemName: "stop.fill")
+                        .foregroundColor(.red)
+                        .frame(minWidth: 28, minHeight: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Stop speaking")
+            }
+
+            // Voice toggle
+            Button(action: { speechManager.setEnabled(!speechManager.isEnabled) }) {
+                Image(systemName: speechManager.isEnabled ? "speaker.wave.2.fill" : "speaker.slash")
+                    .foregroundColor(speechManager.isEnabled ? .accentColor : .secondary)
+                    .frame(minWidth: 28, minHeight: 28)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("Daily Planning")
+            .help(speechManager.isEnabled ? "Disable voice" : "Enable voice")
 
-            // Sessions button
-            Button(action: { showSessions = true }) {
-                Image(systemName: "clock.arrow.circlepath")
+            // Morning briefing
+            Button(action: { showBriefing = true }) {
+                Image(systemName: "sun.max")
+                    .foregroundColor(.orange)
+                    .frame(minWidth: 28, minHeight: 28)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("Session History")
+            .help("Morning Briefing")
 
-            // New conversation
-            Button(action: { appState.startNewConversation() }) {
-                Image(systemName: "plus.circle")
-            }
-            .buttonStyle(.plain)
-            .help("New Conversation")
-
+            // Settings
             Button(action: { showSettings = true }) {
                 Image(systemName: "gear")
+                    .frame(minWidth: 28, minHeight: 28)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .help("Settings")
 
-            Button(action: { appState.clearHistory() }) {
-                Image(systemName: "trash")
-            }
-            .buttonStyle(.plain)
-            .help("Clear history")
+            // Overflow menu
+            Menu {
+                Button(action: { appState.startNewConversation() }) {
+                    Label("New Conversation", systemImage: "plus.circle")
+                }
 
-            Button(action: { NSApp.terminate(nil) }) {
-                Image(systemName: "xmark.circle")
+                Button(action: { showPlanning = true }) {
+                    Label("Daily Planning", systemImage: "calendar.badge.clock")
+                }
+
+                Button(action: { showSessions = true }) {
+                    Label("Sessions", systemImage: "clock.arrow.circlepath")
+                }
+
+                Divider()
+
+                Button(action: { appState.clearHistory() }) {
+                    Label("Clear History", systemImage: "trash")
+                }
+
+                Divider()
+
+                Button(action: { NSApp.terminate(nil) }) {
+                    Label("Quit", systemImage: "xmark.circle")
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .foregroundColor(.secondary)
+                    .frame(minWidth: 32, minHeight: 28)
+                    .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            .help("Quit Conductor")
+            .menuStyle(.borderlessButton)
+            .frame(width: 32)
+            .help("More actions")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -207,6 +262,16 @@ struct ConductorView: View {
                         ForEach(appState.messages) { message in
                             MessageBubbleView(message: message)
                                 .id(message.id)
+                        }
+
+                        if !appState.pendingActions.isEmpty {
+                            ActionApprovalView(
+                                actions: appState.pendingActions,
+                                onApprove: { appState.approveAction($0) },
+                                onReject: { appState.rejectAction($0) },
+                                onApproveAll: { appState.approveAllActions() }
+                            )
+                            .id("approval")
                         }
 
                         if appState.isLoading {
@@ -288,6 +353,9 @@ struct ConductorView: View {
             Text(text)
                 .font(.callout)
                 .foregroundColor(.accentColor)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
@@ -338,6 +406,51 @@ struct ConductorView: View {
 
     private var inputView: some View {
         HStack(spacing: 8) {
+            // Microphone button for speech-to-text
+            Button(action: {
+                speechManager.onTextRecognized = { text in
+                    inputText = text
+                }
+                speechManager.toggleListening()
+            }) {
+                ZStack {
+                    Image(systemName: speechManager.isListening ? "mic.fill" : "mic")
+                        .font(.title3)
+                        .foregroundColor(speechManager.isListening ? .red : .secondary)
+
+                    // Pulsing indicator when listening
+                    if speechManager.isListening {
+                        Circle()
+                            .stroke(Color.red.opacity(0.5), lineWidth: 2)
+                            .frame(width: 28, height: 28)
+                            .scaleEffect(speechManager.isListening ? 1.3 : 1.0)
+                            .opacity(speechManager.isListening ? 0 : 1)
+                            .animation(
+                                Animation.easeOut(duration: 1.0).repeatForever(autoreverses: false),
+                                value: speechManager.isListening
+                            )
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .help(speechManager.isListening ? "Stop listening" : "Start voice input")
+            .disabled(appState.isLoading)
+
+            Menu {
+                ForEach(PromptPresets.all) { preset in
+                    Button(preset.title) {
+                        applyPromptPreset(preset)
+                    }
+                }
+            } label: {
+                Image(systemName: "sparkles")
+                    .font(.title3)
+                    .foregroundColor(.secondary)
+            }
+            .menuStyle(.borderlessButton)
+            .help("Quick prompts")
+            .disabled(appState.isLoading)
+
             TextField("Ask anything...", text: $inputText)
                 .textFieldStyle(.plain)
                 .font(.body)
@@ -369,6 +482,15 @@ struct ConductorView: View {
         Task {
             await appState.sendMessage(content)
         }
+    }
+
+    private func applyPromptPreset(_ preset: PromptPreset) {
+        if inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            inputText = preset.template
+        } else {
+            inputText = preset.template + inputText
+        }
+        isInputFocused = true
     }
 }
 
@@ -403,6 +525,7 @@ struct TabButton: View {
             .padding(.vertical, 6)
             .background(isSelected ? Color.accentColor.opacity(0.1) : Color.clear)
             .cornerRadius(6)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }

@@ -1,6 +1,8 @@
 import Foundation
 
 protocol EventKitProviding {
+    func calendarAuthorizationStatus() -> EventKitManager.AuthorizationStatus
+    func remindersAuthorizationStatus() -> EventKitManager.AuthorizationStatus
     func getTodayEvents() async -> [EventKitManager.CalendarEvent]
     func getUpcomingReminders(limit: Int) async -> [EventKitManager.Reminder]
     func getMonthEvents(for date: Date) async -> [EventKitManager.CalendarEvent]
@@ -9,4 +11,3 @@ protocol EventKitProviding {
 }
 
 extension EventKitManager: EventKitProviding {}
-

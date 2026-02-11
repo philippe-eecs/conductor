@@ -1,9 +1,13 @@
 import Cocoa
 import Carbon
+import Combine
 
+@MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotKeyRef: EventHotKeyRef?
     private var eventHandler: EventHandlerRef?
+    private var statusItem: NSStatusItem?
+    private var badgeCancellable: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Keep running in background without dock icon
@@ -20,11 +24,131 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Start proactive engine (event-driven scheduling)
         ProactiveEngine.shared.start()
+
+        // Set up menu bar status item
+        setupStatusItem()
+
+        // Show window on launch
+        MainWindowController.shared.showWindow(appState: AppState.shared)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         unregisterGlobalHotkey()
         ProactiveEngine.shared.stop()
+    }
+
+    // MARK: - Status Item
+
+    private func setupStatusItem() {
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+
+        if let button = statusItem?.button {
+            updateStatusItemIcon(hasBadge: AppState.shared.showPlanningNotificationBadge)
+
+            // Left-click toggles window
+            button.action = #selector(statusItemClicked(_:))
+            button.target = self
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        }
+
+        // Observe badge changes
+        badgeCancellable = AppState.shared.$showPlanningNotificationBadge
+            .receive(on: RunLoop.main)
+            .sink { [weak self] hasBadge in
+                self?.updateStatusItemIcon(hasBadge: hasBadge)
+            }
+    }
+
+    private func updateStatusItemIcon(hasBadge: Bool) {
+        guard let button = statusItem?.button else { return }
+        if hasBadge {
+            // Use a composed image with badge
+            let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
+            if let brainImage = NSImage(systemSymbolName: "brain", accessibilityDescription: "Conductor")?.withSymbolConfiguration(config) {
+                let badgedImage = NSImage(size: NSSize(width: 22, height: 18), flipped: false) { rect in
+                    brainImage.draw(in: NSRect(x: 0, y: 0, width: 18, height: 18))
+                    // Draw red dot badge
+                    NSColor.red.setFill()
+                    let badgeRect = NSRect(x: 15, y: 12, width: 6, height: 6)
+                    NSBezierPath(ovalIn: badgeRect).fill()
+                    return true
+                }
+                badgedImage.isTemplate = false
+                button.image = badgedImage
+            }
+        } else {
+            button.image = NSImage(systemSymbolName: "brain", accessibilityDescription: "Conductor")
+        }
+    }
+
+    @objc private func statusItemClicked(_ sender: NSStatusBarButton) {
+        guard let event = NSApp.currentEvent else { return }
+
+        if event.type == .rightMouseUp {
+            showContextMenu()
+        } else {
+            MainWindowController.shared.toggleWindow(appState: AppState.shared)
+        }
+    }
+
+    private func showContextMenu() {
+        let menu = NSMenu()
+
+        let openItem = NSMenuItem(title: "Open Conductor", action: #selector(openConductor), keyEquivalent: "o")
+        openItem.target = self
+        menu.addItem(openItem)
+
+        menu.addItem(NSMenuItem.separator())
+
+        let planningItem = NSMenuItem(title: "Daily Planning...", action: #selector(showPlanning), keyEquivalent: "p")
+        planningItem.target = self
+        menu.addItem(planningItem)
+
+        let newConvoItem = NSMenuItem(title: "New Conversation", action: #selector(newConversation), keyEquivalent: "n")
+        newConvoItem.target = self
+        menu.addItem(newConvoItem)
+
+        menu.addItem(NSMenuItem.separator())
+
+        let settingsItem = NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ",")
+        settingsItem.target = self
+        menu.addItem(settingsItem)
+
+        menu.addItem(NSMenuItem.separator())
+
+        let quitItem = NSMenuItem(title: "Quit Conductor", action: #selector(quitApp), keyEquivalent: "q")
+        quitItem.target = self
+        menu.addItem(quitItem)
+
+        statusItem?.menu = menu
+        statusItem?.button?.performClick(nil)
+        // Remove menu after showing so left-click works again
+        DispatchQueue.main.async { [weak self] in
+            self?.statusItem?.menu = nil
+        }
+    }
+
+    @objc private func openConductor() {
+        MainWindowController.shared.showWindow(appState: AppState.shared)
+    }
+
+    @objc private func showPlanning() {
+        MainWindowController.shared.showWindow(appState: AppState.shared)
+        NotificationCenter.default.post(name: .showPlanningView, object: nil)
+    }
+
+    @objc private func newConversation() {
+        AppState.shared.startNewConversation()
+        MainWindowController.shared.showWindow(appState: AppState.shared)
+    }
+
+    @objc private func openSettings() {
+        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc private func quitApp() {
+        NSApplication.shared.terminate(nil)
     }
 
     // MARK: - Global Hotkey
@@ -103,20 +227,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     static func toggleConductorWindow() {
-        // Find the menubar extra window and toggle it
-        for window in NSApp.windows {
-            if window.className.contains("MenuBarExtra") || window.title.isEmpty {
-                if window.isVisible {
-                    window.orderOut(nil)
-                } else {
-                    window.makeKeyAndOrderFront(nil)
-                    NSApp.activate(ignoringOtherApps: true)
-                }
-                return
-            }
-        }
-
-        // Fallback: activate the app
-        NSApp.activate(ignoringOtherApps: true)
+        MainWindowController.shared.toggleWindow(appState: AppState.shared)
     }
 }

@@ -300,6 +300,30 @@ final class DatabaseTests: XCTestCase {
         XCTAssertNil(t2After.listId)
     }
 
+    func test_getTasksForDay_includesOverdueByDefault() throws {
+        let db = Database(connection: try Connection(.inMemory))
+
+        let calendar = Calendar.current
+        let startOfDay = calendar.startOfDay(for: Date())
+
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: startOfDay)!
+        let overdue = calendar.date(byAdding: .hour, value: 18, to: yesterday)!
+        let dueToday = calendar.date(byAdding: .hour, value: 9, to: startOfDay)!
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
+        let dueTomorrow = calendar.date(byAdding: .hour, value: 9, to: tomorrow)!
+
+        try db.createTask(TodoTask(title: "Overdue", dueDate: overdue))
+        try db.createTask(TodoTask(title: "Due today", dueDate: dueToday))
+        try db.createTask(TodoTask(title: "Due tomorrow", dueDate: dueTomorrow))
+        try db.createTask(TodoTask(title: "Completed overdue", dueDate: overdue, isCompleted: true, completedAt: Date()))
+
+        let tasks = try db.getTasksForDay(startOfDay, includeCompleted: false, includeOverdue: true)
+        XCTAssertEqual(Set(tasks.map(\.title)), Set(["Overdue", "Due today"]))
+
+        let tasksNoOverdue = try db.getTasksForDay(startOfDay, includeCompleted: false, includeOverdue: false)
+        XCTAssertEqual(Set(tasksNoOverdue.map(\.title)), Set(["Due today"]))
+    }
+
     func test_toggleTaskCompleted_setsAndClearsCompletedAt() throws {
         let db = Database(connection: try Connection(.inMemory))
         let t1 = TodoTask(title: "Toggle me")

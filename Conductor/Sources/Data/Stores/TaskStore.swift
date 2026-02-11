@@ -273,6 +273,37 @@ struct TaskStore: DatabaseStore {
         }
     }
 
+    func getTasksForDay(_ date: Date, includeCompleted: Bool = false, includeOverdue: Bool = true) throws -> [TodoTask] {
+        try perform { db in
+            let calendar = Calendar.current
+            let startOfDay = calendar.startOfDay(for: date).timeIntervalSince1970
+            let endOfDay = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: date))!.timeIntervalSince1970
+
+            var query: SQLite.Table
+            if includeOverdue {
+                query = tasks.filter(
+                    (taskDueDate != nil && taskDueDate >= startOfDay && taskDueDate < endOfDay) ||
+                    (taskDueDate != nil && taskDueDate < startOfDay && taskCompleted == 0)
+                )
+            } else {
+                query = tasks.filter(
+                    taskDueDate != nil && taskDueDate >= startOfDay && taskDueDate < endOfDay
+                )
+            }
+            if !includeCompleted {
+                query = query.filter(taskCompleted == 0)
+            }
+
+            query = query.order(taskDueDate.asc, taskPriority.desc, taskCreatedAt.desc)
+
+            var result: [TodoTask] = []
+            for row in try db.prepare(query) {
+                result.append(rowToTask(row))
+            }
+            return result
+        }
+    }
+
     func getScheduledTasks(includeCompleted: Bool = false) throws -> [TodoTask] {
         try perform { db in
             var query = tasks.filter(taskDueDate != nil)

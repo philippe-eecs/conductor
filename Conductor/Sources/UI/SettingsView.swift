@@ -4,6 +4,7 @@ import AppKit
 struct SettingsView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var speechManager = SpeechManager.shared
 
     @State private var calendarStatus: EventKitManager.AuthorizationStatus = .notDetermined
     @State private var remindersStatus: EventKitManager.AuthorizationStatus = .notDetermined
@@ -13,18 +14,20 @@ struct SettingsView: View {
     // Planning preferences
     @State private var planningEnabled: Bool = true
     @State private var morningBriefHour: Int = 8
-    @State private var eveningBriefHour: Int = 18
     @State private var focusSuggestionsEnabled: Bool = true
     @State private var includeOverdueReminders: Bool = true
     @State private var autoRollIncomplete: Bool = false
-    @State private var checkinsEnabled: Bool = true
-    @State private var midmorningCheckinTime: Date = SettingsView.makeTimeDate(hour: 10, minute: 30)
-    @State private var afternoonCheckinTime: Date = SettingsView.makeTimeDate(hour: 13, minute: 30)
-    @State private var winddownCheckinTime: Date = SettingsView.makeTimeDate(hour: 16, minute: 30)
+    @State private var weeklyReviewEnabled: Bool = true
+    @State private var monthlyReviewEnabled: Bool = true
+
+    // Daily Brief configuration
+    @State private var morningBriefEnabled: Bool = true
+    @State private var morningBriefNotificationType: NotificationType = .notification
 
     // Claude model preferences
-    @State private var chatModel: String = "sonnet"
+    @State private var chatModel: String = "opus"
     @State private var planningModel: String = "opus"
+    @State private var claudePermissionMode: String = "plan"
 
     // Security & Permission preferences
     @State private var calendarReadEnabled: Bool = true
@@ -33,6 +36,18 @@ struct SettingsView: View {
     @State private var remindersWriteEnabled: Bool = false
     @State private var emailEnabled: Bool = false
     @State private var commandAllowlistEnabled: Bool = true
+
+    // Agent task preferences
+    @State private var agentTasksEnabled: Bool = true
+    @State private var emailSweepEnabled: Bool = false
+    @State private var agentTaskModel: String = "sonnet"
+    @State private var activeAgentTaskCount: Int = 0
+
+    // Diagnostics
+    @State private var lastCalendarFetchCount: Int?
+    @State private var lastRemindersFetchCount: Int?
+    @State private var lastContextSnapshotSummary: String?
+    @State private var lastDiagnosticsRunAt: Date?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -63,6 +78,11 @@ struct SettingsView: View {
 
                     Divider()
 
+                    // Voice Output
+                    voiceSection
+
+                    Divider()
+
                     // Cost Tracking
                     costTrackingSection
 
@@ -73,6 +93,10 @@ struct SettingsView: View {
 
                     Divider()
 
+                    diagnosticsSection
+
+                    Divider()
+
                     // Daily Planning
                     dailyPlanningSection
 
@@ -80,6 +104,11 @@ struct SettingsView: View {
 
                     // Security & Permissions
                     securitySection
+
+                    Divider()
+
+                    // Agent Tasks
+                    agentTasksSection
 
                     Divider()
 
@@ -120,26 +149,19 @@ struct SettingsView: View {
     private func loadPlanningPreferences() {
         planningEnabled = (try? Database.shared.getPreference(key: "planning_enabled")) != "false"
         morningBriefHour = Int((try? Database.shared.getPreference(key: "morning_brief_hour")) ?? "8") ?? 8
-        eveningBriefHour = Int((try? Database.shared.getPreference(key: "evening_brief_hour")) ?? "18") ?? 18
         focusSuggestionsEnabled = (try? Database.shared.getPreference(key: "focus_suggestions_enabled")) != "false"
         includeOverdueReminders = (try? Database.shared.getPreference(key: "include_overdue_reminders")) != "false"
         autoRollIncomplete = (try? Database.shared.getPreference(key: "auto_roll_incomplete")) == "true"
-        checkinsEnabled = (try? Database.shared.getPreference(key: "checkins_enabled")) != "false"
+        weeklyReviewEnabled = (try? Database.shared.getPreference(key: "weekly_review_enabled")) != "false"
+        monthlyReviewEnabled = (try? Database.shared.getPreference(key: "monthly_review_enabled")) != "false"
 
-        chatModel = (((try? Database.shared.getPreference(key: "claude_chat_model")) ?? nil) ?? "sonnet")
+        chatModel = (((try? Database.shared.getPreference(key: "claude_chat_model")) ?? nil) ?? "opus")
         planningModel = (((try? Database.shared.getPreference(key: "claude_planning_model")) ?? nil) ?? "opus")
+        claudePermissionMode = (((try? Database.shared.getPreference(key: "claude_permission_mode")) ?? nil) ?? "plan")
 
-        let midmorningHour = Int((try? Database.shared.getPreference(key: "midmorning_checkin_hour")) ?? "10") ?? 10
-        let midmorningMinute = Int((try? Database.shared.getPreference(key: "midmorning_checkin_minute")) ?? "30") ?? 30
-        midmorningCheckinTime = Self.makeTimeDate(hour: midmorningHour, minute: midmorningMinute)
-
-        let afternoonHour = Int((try? Database.shared.getPreference(key: "afternoon_checkin_hour")) ?? "13") ?? 13
-        let afternoonMinute = Int((try? Database.shared.getPreference(key: "afternoon_checkin_minute")) ?? "30") ?? 30
-        afternoonCheckinTime = Self.makeTimeDate(hour: afternoonHour, minute: afternoonMinute)
-
-        let winddownHour = Int((try? Database.shared.getPreference(key: "winddown_checkin_hour")) ?? "16") ?? 16
-        let winddownMinute = Int((try? Database.shared.getPreference(key: "winddown_checkin_minute")) ?? "30") ?? 30
-        winddownCheckinTime = Self.makeTimeDate(hour: winddownHour, minute: winddownMinute)
+        // Daily Brief configuration
+        morningBriefEnabled = (try? Database.shared.getPreference(key: "morning_brief_enabled")) != "false"
+        morningBriefNotificationType = NotificationType(rawValue: (try? Database.shared.getPreference(key: "morning_brief_notification_type")) ?? "notification") ?? .notification
 
         // Security preferences (default to safe values)
         calendarReadEnabled = (try? Database.shared.getPreference(key: "calendar_read_enabled")) != "false"
@@ -148,6 +170,11 @@ struct SettingsView: View {
         remindersWriteEnabled = (try? Database.shared.getPreference(key: "reminders_write_enabled")) == "true"
         emailEnabled = (try? Database.shared.getPreference(key: "email_integration_enabled")) == "true"
         commandAllowlistEnabled = (try? Database.shared.getPreference(key: "command_allowlist_enabled")) != "false"
+
+        agentTasksEnabled = (try? Database.shared.getPreference(key: "agent_tasks_enabled")) != "false"
+        emailSweepEnabled = (try? Database.shared.getPreference(key: "email_sweep_enabled")) == "true"
+        agentTaskModel = (((try? Database.shared.getPreference(key: "agent_task_model")) ?? nil) ?? "sonnet")
+        activeAgentTaskCount = (try? Database.shared.getActiveAgentTasks().count) ?? 0
     }
 
     private func savePlanningPreference(key: String, value: String) {
@@ -272,85 +299,106 @@ struct SettingsView: View {
             Label("Assistant Mode", systemImage: "wand.and.stars")
                 .font(.headline)
 
-            VStack(alignment: .leading, spacing: 16) {
-                // Safe mode (default)
-                modeOption(
-                    title: "Safe Mode",
-                    description: "Q&A only. Cannot execute commands or modify files.",
-                    icon: "shield.fill",
-                    iconColor: .green,
-                    isSelected: !appState.toolsEnabled
-                ) {
-                    appState.setToolsEnabled(false)
-                }
-
-                // Tool mode
-                modeOption(
-                    title: "Tool Mode",
-                    description: "Can execute commands and actions with your approval.",
-                    icon: "hammer.fill",
-                    iconColor: .orange,
-                    isSelected: appState.toolsEnabled
-                ) {
-                    appState.setToolsEnabled(true)
-                }
-            }
+            Toggle("Enable tool execution", isOn: Binding(
+                get: { appState.toolsEnabled },
+                set: { appState.setToolsEnabled($0) }
+            ))
 
             if appState.toolsEnabled {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("Tool permission mode")
+                            .font(.subheadline)
+                        Spacer()
+                        Picker("", selection: $claudePermissionMode) {
+                            Text("Plan").tag("plan")
+                            Text("Default").tag("default")
+                            Text("Don't ask").tag("dontAsk")
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .frame(width: 160)
+                        .onChange(of: claudePermissionMode) { _, newValue in
+                            savePlanningPreference(key: "claude_permission_mode", value: newValue)
+                            showStatus("Tool permission mode set to \(newValue)")
+                        }
+                    }
+
+                    Text("\"Plan\" is safest: Claude will propose actions instead of executing them. Use \"Default\" only if you can monitor approvals.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.top, 6)
+
                 HStack(spacing: 6) {
-                    Image(systemName: "info.circle")
-                        .foregroundColor(.blue)
-                    Text("Claude will ask for permission before running commands or making changes.")
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundColor(.orange)
+                    Text("When enabled, Claude can execute commands (with approval prompts).")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
                 .padding(.top, 4)
             }
+
+            Text("Context is fetched on-demand via MCP tools, gated by the permission toggles below.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .padding(.top, 4)
         }
     }
 
-    private func modeOption(
-        title: String,
-        description: String,
-        icon: String,
-        iconColor: Color,
-        isSelected: Bool,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack(spacing: 12) {
-                Image(systemName: icon)
-                    .foregroundColor(iconColor)
-                    .font(.title2)
-                    .frame(width: 28)
+    // MARK: - Voice Section
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
+    private var voiceSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Voice Output", systemImage: "speaker.wave.2")
+                .font(.headline)
+
+            Toggle("Read responses aloud", isOn: Binding(
+                get: { speechManager.isEnabled },
+                set: { speechManager.setEnabled($0) }
+            ))
+
+            if speechManager.isEnabled {
+                HStack {
+                    Text("Voice")
                         .font(.subheadline)
-                        .fontWeight(.medium)
-                        .foregroundColor(.primary)
-                    Text(description)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    Spacer()
+                    Picker("", selection: Binding(
+                        get: { speechManager.selectedVoice },
+                        set: { speechManager.setVoice($0) }
+                    )) {
+                        Text("System Default").tag("")
+                        ForEach(speechManager.availableVoices, id: \.id) { voice in
+                            Text(voice.name).tag(voice.id)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(width: 180)
                 }
 
-                Spacer()
-
-                if isSelected {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.accentColor)
-                        .font(.title3)
+                if speechManager.isSpeaking {
+                    HStack {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                        Text("Speaking...")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Button("Stop") {
+                            speechManager.stop()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
                 }
             }
-            .padding(10)
-            .background(isSelected ? Color.accentColor.opacity(0.1) : Color(NSColor.controlBackgroundColor))
-            .cornerRadius(8)
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 1)
-            )
+
+            Text("When enabled, Conductor will read assistant responses using text-to-speech.")
+                .font(.caption)
+                .foregroundColor(.secondary)
         }
-        .buttonStyle(.plain)
     }
 
     // MARK: - Cost Tracking Section
@@ -404,10 +452,15 @@ struct SettingsView: View {
                 status: calendarStatus,
                 onRequest: {
                     Task {
+                        guard RuntimeEnvironment.supportsTCCPrompts else {
+                            showStatus("Permission prompts require running as a .app bundle. Use scripts/dev-run-app.sh.")
+                            return
+                        }
                         let granted = await EventKitManager.shared.requestCalendarAccess()
                         await MainActor.run {
                             calendarStatus = EventKitManager.shared.calendarAuthorizationStatus()
                             if granted {
+                                try? Database.shared.setPreference(key: "calendar_read_enabled", value: "true")
                                 showStatus("Calendar access granted!")
                             } else if calendarStatus == .denied {
                                 showStatus("Calendar access denied. Enable in System Settings.")
@@ -424,10 +477,15 @@ struct SettingsView: View {
                 status: remindersStatus,
                 onRequest: {
                     Task {
+                        guard RuntimeEnvironment.supportsTCCPrompts else {
+                            showStatus("Permission prompts require running as a .app bundle. Use scripts/dev-run-app.sh.")
+                            return
+                        }
                         let granted = await EventKitManager.shared.requestRemindersAccess()
                         await MainActor.run {
                             remindersStatus = EventKitManager.shared.remindersAuthorizationStatus()
                             if granted {
+                                try? Database.shared.setPreference(key: "reminders_read_enabled", value: "true")
                                 showStatus("Reminders access granted!")
                             } else if remindersStatus == .denied {
                                 showStatus("Reminders access denied. Enable in System Settings.")
@@ -440,44 +498,147 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - Diagnostics
+
+    private var diagnosticsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Diagnostics", systemImage: "stethoscope")
+                .font(.headline)
+
+            Text("Use these to verify Calendar/Reminders access and whether context is making it into the assistant prompt.")
+                .font(.callout)
+                .foregroundColor(.secondary)
+
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("Calendar auth")
+                        .font(.subheadline)
+                    Spacer()
+                    Text(statusText(calendarStatus))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                HStack {
+                    Text("Reminders auth")
+                        .font(.subheadline)
+                    Spacer()
+                    Text(statusText(remindersStatus))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                Divider()
+
+                HStack(spacing: 10) {
+                    Button("Fetch Today’s Events") {
+                        Task { await runCalendarFetchDiagnostics() }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    Button("Fetch Reminders") {
+                        Task { await runRemindersFetchDiagnostics() }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    Button("Build Context Snapshot") {
+                        Task { await runContextSnapshotDiagnostics() }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+
+                if let at = lastDiagnosticsRunAt {
+                    Text("Last run: \(SharedDateFormatters.mediumDateTime.string(from: at))")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                if let count = lastCalendarFetchCount {
+                    Text("Calendar fetch: \(count) event\(count == 1 ? "" : "s")")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                if let count = lastRemindersFetchCount {
+                    Text("Reminders fetch: \(count) item\(count == 1 ? "" : "s")")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                if let summary = lastContextSnapshotSummary {
+                    Text("Context snapshot: \(summary)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding(10)
+            .background(Color(NSColor.controlBackgroundColor))
+            .cornerRadius(8)
+
+            Text("If permissions keep re-prompting after rebuilds, sign the app with a stable Apple Development identity (see build script).")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+
     private func permissionRow(
         label: String,
         status: EventKitManager.AuthorizationStatus,
         onRequest: @escaping () -> Void,
         systemSettingsURL: String
     ) -> some View {
-        HStack(spacing: 12) {
-            // Status indicator
-            Image(systemName: statusIcon(status))
-                .foregroundColor(statusColor(status))
-                .font(.title3)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 12) {
+                // Status indicator
+                Image(systemName: statusIcon(status))
+                    .foregroundColor(statusColor(status))
+                    .font(.title3)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(label)
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                Text(statusText(status))
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(label)
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                    Text(statusText(status))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                Spacer()
+
+                // Action button
+                if status == .notDetermined {
+                    if RuntimeEnvironment.supportsTCCPrompts {
+                        Button("Request Access") {
+                            onRequest()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    } else {
+                        Button("Request Access") {}
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(true)
+                    }
+                } else if status == .denied || status == .restricted {
+                    Button("Open Settings") {
+                        if let url = URL(string: systemSettingsURL) {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
             }
 
-            Spacer()
-
-            // Action button
-            if status == .notDetermined {
-                Button("Request Access") {
-                    onRequest()
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            } else if status == .denied || status == .restricted {
-                Button("Open Settings") {
-                    if let url = URL(string: systemSettingsURL) {
-                        NSWorkspace.shared.open(url)
-                    }
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+            if status == .notDetermined && !RuntimeEnvironment.supportsTCCPrompts {
+                Text("Permission prompts require running as a .app bundle. Use scripts/dev-run-app.sh.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            } else if status == .writeOnly {
+                Text("Write-only access allows creating items but not reading your schedule/tasks. Grant full access for schedule/context features.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
             }
         }
         .padding(10)
@@ -496,6 +657,48 @@ struct SettingsView: View {
         }
     }
 
+    private func diagnosticsStamp() {
+        lastDiagnosticsRunAt = Date()
+        refreshPermissionStatuses()
+        appState.refreshPermissionStates()
+    }
+
+    @MainActor
+    private func runCalendarFetchDiagnostics() async {
+        diagnosticsStamp()
+        let events = await EventKitManager.shared.getTodayEvents()
+        lastCalendarFetchCount = events.count
+        appState.logActivity(.context, "Diagnostics: fetched \(events.count) calendar event(s) for today")
+        showStatus(events.isEmpty ? "Fetched 0 events" : "Fetched \(events.count) events")
+    }
+
+    @MainActor
+    private func runRemindersFetchDiagnostics() async {
+        diagnosticsStamp()
+        let reminders = await EventKitManager.shared.getUpcomingReminders(limit: 10)
+        lastRemindersFetchCount = reminders.count
+        appState.logActivity(.context, "Diagnostics: fetched \(reminders.count) reminder(s)")
+        showStatus(reminders.isEmpty ? "Fetched 0 reminders" : "Fetched \(reminders.count) reminders")
+    }
+
+    @MainActor
+    private func runContextSnapshotDiagnostics() async {
+        diagnosticsStamp()
+        let context = await ContextBuilder.shared.buildContext()
+
+        let summaryParts: [String] = [
+            "events=\(context.todayEvents.count)",
+            "reminders=\(context.upcomingReminders.count)",
+            "notes=\(context.recentNotes.count)",
+            "goals=\(context.planningContext?.todaysGoals.count ?? 0)",
+            "email=\(context.emailContext?.importantEmails.count ?? 0)"
+        ]
+        let summary = summaryParts.joined(separator: ", ")
+        lastContextSnapshotSummary = summary
+        appState.logActivity(.context, "Diagnostics: built context snapshot (\(summary))")
+        showStatus("Context snapshot built")
+    }
+
     private func statusColor(_ status: EventKitManager.AuthorizationStatus) -> Color {
         switch status {
         case .fullAccess, .writeOnly:
@@ -512,7 +715,7 @@ struct SettingsView: View {
         case .fullAccess:
             return "Full Access"
         case .writeOnly:
-            return "Write Only"
+            return "Write Only (Limited)"
         case .notDetermined:
             return "Not Requested"
         case .denied:
@@ -537,82 +740,29 @@ struct SettingsView: View {
 
             if planningEnabled {
                 VStack(alignment: .leading, spacing: 12) {
-                    // Morning Brief Time
-                    HStack {
-                        Text("Morning Brief")
-                            .font(.subheadline)
-                        Spacer()
-                        Picker("", selection: $morningBriefHour) {
-                            ForEach(5..<12, id: \.self) { hour in
-                                Text("\(hour):00 AM").tag(hour)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .frame(width: 120)
-                        .onChange(of: morningBriefHour) { _, newValue in
-                            savePlanningPreference(key: "morning_brief_hour", value: String(newValue))
-                        }
-                    }
-
-                    // Evening Shutdown Time
-                    HStack {
-                        Text("Evening Shutdown")
-                            .font(.subheadline)
-                        Spacer()
-                        Picker("", selection: $eveningBriefHour) {
-                            ForEach(16..<22, id: \.self) { hour in
-                                Text("\(hour > 12 ? hour - 12 : hour):00 \(hour >= 12 ? "PM" : "AM")").tag(hour)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .frame(width: 120)
-                        .onChange(of: eveningBriefHour) { _, newValue in
-                            savePlanningPreference(key: "evening_brief_hour", value: String(newValue))
-                        }
-                    }
+                    // Daily Brief
+                    dailyBriefConfigRow
 
                     Divider()
 
-                    Toggle("Enable check-ins", isOn: $checkinsEnabled)
-                        .font(.subheadline)
-                        .onChange(of: checkinsEnabled) { _, newValue in
-                            savePlanningPreference(key: "checkins_enabled", value: newValue ? "true" : "false")
-                        }
-
-                    if checkinsEnabled {
-                        HStack {
-                            Text("Mid-morning Check-in")
+                    // Reviews (collapsed section)
+                    DisclosureGroup("Reviews") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Toggle("Weekly review (Mondays)", isOn: $weeklyReviewEnabled)
                                 .font(.subheadline)
-                            Spacer()
-                            DatePicker("", selection: $midmorningCheckinTime, displayedComponents: [.hourAndMinute])
-                                .labelsHidden()
-                                .onChange(of: midmorningCheckinTime) { _, newValue in
-                                    saveTimePreference(date: newValue, hourKey: "midmorning_checkin_hour", minuteKey: "midmorning_checkin_minute")
+                                .onChange(of: weeklyReviewEnabled) { _, newValue in
+                                    savePlanningPreference(key: "weekly_review_enabled", value: newValue ? "true" : "false")
+                                }
+
+                            Toggle("Monthly review (1st of month)", isOn: $monthlyReviewEnabled)
+                                .font(.subheadline)
+                                .onChange(of: monthlyReviewEnabled) { _, newValue in
+                                    savePlanningPreference(key: "monthly_review_enabled", value: newValue ? "true" : "false")
                                 }
                         }
-
-                        HStack {
-                            Text("Afternoon Check-in")
-                                .font(.subheadline)
-                            Spacer()
-                            DatePicker("", selection: $afternoonCheckinTime, displayedComponents: [.hourAndMinute])
-                                .labelsHidden()
-                                .onChange(of: afternoonCheckinTime) { _, newValue in
-                                    saveTimePreference(date: newValue, hourKey: "afternoon_checkin_hour", minuteKey: "afternoon_checkin_minute")
-                                }
-                        }
-
-                        HStack {
-                            Text("Wind-down Check-in")
-                                .font(.subheadline)
-                            Spacer()
-                            DatePicker("", selection: $winddownCheckinTime, displayedComponents: [.hourAndMinute])
-                                .labelsHidden()
-                                .onChange(of: winddownCheckinTime) { _, newValue in
-                                    saveTimePreference(date: newValue, hourKey: "winddown_checkin_hour", minuteKey: "winddown_checkin_minute")
-                                }
-                        }
+                        .padding(.top, 4)
                     }
+                    .font(.subheadline)
 
                     Divider()
 
@@ -638,10 +788,56 @@ struct SettingsView: View {
                 .padding(.leading, 4)
             }
 
-            Text("Daily briefs help you start and end your day with intention.")
+            Text("Daily briefs help you start your day with intention.")
                 .font(.caption)
                 .foregroundColor(.secondary)
         }
+    }
+
+    private var dailyBriefConfigRow: some View {
+        VStack(spacing: 6) {
+            HStack {
+                Toggle("", isOn: $morningBriefEnabled)
+                    .labelsHidden()
+                    .onChange(of: morningBriefEnabled) { _, newValue in
+                        savePlanningPreference(key: "morning_brief_enabled", value: newValue ? "true" : "false")
+                    }
+
+                Text("Daily Brief")
+                    .font(.subheadline)
+                    .foregroundColor(morningBriefEnabled ? .primary : .secondary)
+
+                Spacer()
+
+                if morningBriefEnabled {
+                    DatePicker("", selection: Binding(
+                        get: { Self.makeTimeDate(hour: morningBriefHour, minute: 0) },
+                        set: { morningBriefHour = Calendar.current.component(.hour, from: $0) }
+                    ), displayedComponents: [.hourAndMinute])
+                        .labelsHidden()
+                        .frame(width: 90)
+                        .onChange(of: morningBriefHour) { _, newValue in
+                            savePlanningPreference(key: "morning_brief_hour", value: String(newValue))
+                        }
+
+                    // Notification type picker
+                    Picker("", selection: $morningBriefNotificationType) {
+                        ForEach(NotificationType.allCases, id: \.self) { type in
+                            Label(type.displayName, systemImage: type.icon)
+                                .tag(type)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(width: 100)
+                    .onChange(of: morningBriefNotificationType) { _, newValue in
+                        savePlanningPreference(key: "morning_brief_notification_type", value: newValue.rawValue)
+                    }
+                }
+            }
+        }
+        .padding(8)
+        .background(morningBriefEnabled ? Color(NSColor.controlBackgroundColor) : Color.clear)
+        .cornerRadius(6)
     }
 
     // MARK: - Security Section
@@ -805,6 +1001,65 @@ struct SettingsView: View {
         appState.logActivity(.system, "\(setting) \(enabled ? "enabled" : "disabled")")
     }
 
+    // MARK: - Agent Tasks Section
+
+    private var agentTasksSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Agent Tasks", systemImage: "gearshape.2")
+                .font(.headline)
+
+            Toggle("Enable background agent tasks", isOn: $agentTasksEnabled)
+                .onChange(of: agentTasksEnabled) { _, newValue in
+                    savePlanningPreference(key: "agent_tasks_enabled", value: newValue ? "true" : "false")
+                }
+
+            if agentTasksEnabled {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("Agent model")
+                            .font(.subheadline)
+                        Spacer()
+                        Picker("", selection: $agentTaskModel) {
+                            Text("Sonnet").tag("sonnet")
+                            Text("Opus").tag("opus")
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .frame(width: 140)
+                        .onChange(of: agentTaskModel) { _, newValue in
+                            savePlanningPreference(key: "agent_task_model", value: newValue)
+                        }
+                    }
+
+                    Toggle("Email triage sweep (every 30 min)", isOn: $emailSweepEnabled)
+                        .font(.subheadline)
+                        .onChange(of: emailSweepEnabled) { _, newValue in
+                            savePlanningPreference(key: "email_sweep_enabled", value: newValue ? "true" : "false")
+                        }
+                        .disabled(!emailEnabled)
+
+                    if !emailEnabled && emailSweepEnabled {
+                        Text("Enable email integration in Security & Permissions first.")
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                    }
+
+                    HStack {
+                        Text("Active agent tasks: \(activeAgentTaskCount)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                    }
+                }
+                .padding(.leading, 4)
+            }
+
+            Text("Agent tasks run in the background using separate Claude sessions. They power reminders, follow-ups, and scheduled sweeps.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+
     // MARK: - About Section
 
     private var aboutSection: some View {
@@ -846,6 +1101,33 @@ struct SettingsView: View {
             Text(description)
                 .font(.caption)
                 .foregroundColor(.secondary)
+        }
+    }
+}
+
+// MARK: - Notification Type
+
+enum NotificationType: String, CaseIterable {
+    case notification = "notification"
+    case voice = "voice"
+    case both = "both"
+    case none = "none"
+
+    var displayName: String {
+        switch self {
+        case .notification: return "Banner"
+        case .voice: return "Voice"
+        case .both: return "Both"
+        case .none: return "None"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .notification: return "bell"
+        case .voice: return "speaker.wave.2"
+        case .both: return "bell.and.waves.left.and.right"
+        case .none: return "bell.slash"
         }
     }
 }

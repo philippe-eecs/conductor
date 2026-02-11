@@ -155,6 +155,11 @@ final class CostTracker: ObservableObject {
         guard !hasRequestedNotificationPermission else { return }
         hasRequestedNotificationPermission = true
 
+        guard RuntimeEnvironment.supportsUserNotifications else {
+            NSLog("CostTracker notifications disabled (not running inside a .app bundle).")
+            return
+        }
+
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
             if let error = error {
                 print("Failed to request notification permission: \(error)")
@@ -174,6 +179,10 @@ final class CostTracker: ObservableObject {
     }
 
     private func sendBudgetAlert(type: String, budget: Double, spent: Double) {
+        guard RuntimeEnvironment.supportsUserNotifications else {
+            print("Budget alert (\(type)) skipped (notifications unavailable): budget=\(formatCost(budget)), spent=\(formatCost(spent))")
+            return
+        }
         // Use ISO 8601 date format for stable, locale-independent keys
         let dateKey = SharedDateFormatters.iso8601.string(from: Date())
 

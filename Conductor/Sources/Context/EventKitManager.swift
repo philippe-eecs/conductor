@@ -35,6 +35,12 @@ final class EventKitManager: @unchecked Sendable {
         }
     }
 
+    private func resetEventStoreCache() async {
+        await perform { store in
+            store.reset()
+        }
+    }
+
     // MARK: - Authorization
 
     enum AuthorizationStatus {
@@ -118,18 +124,26 @@ final class EventKitManager: @unchecked Sendable {
     }
 
     func requestCalendarAccess() async -> Bool {
+        guard RuntimeEnvironment.supportsTCCPrompts else {
+            print("Calendar access request skipped (not running inside a .app bundle).")
+            return false
+        }
         // Use a dedicated store for requesting permission so we don't race with
         // concurrent reads/writes on our serialized `eventStore`.
         let store = EKEventStore()
         if #available(macOS 14.0, *) {
             do {
-                return try await store.requestFullAccessToEvents()
+                let granted = try await store.requestFullAccessToEvents()
+                if granted {
+                    await resetEventStoreCache()
+                }
+                return granted
             } catch {
                 print("Calendar access request failed: \(error)")
                 return false
             }
         } else {
-            return await withCheckedContinuation { continuation in
+            let granted = await withCheckedContinuation { continuation in
                 store.requestAccess(to: .event) { granted, error in
                     if let error = error {
                         print("Calendar access request failed: \(error)")
@@ -137,22 +151,34 @@ final class EventKitManager: @unchecked Sendable {
                     continuation.resume(returning: granted)
                 }
             }
+            if granted {
+                await resetEventStoreCache()
+            }
+            return granted
         }
     }
 
     func requestRemindersAccess() async -> Bool {
+        guard RuntimeEnvironment.supportsTCCPrompts else {
+            print("Reminders access request skipped (not running inside a .app bundle).")
+            return false
+        }
         // Use a dedicated store for requesting permission so we don't race with
         // concurrent reads/writes on our serialized `eventStore`.
         let store = EKEventStore()
         if #available(macOS 14.0, *) {
             do {
-                return try await store.requestFullAccessToReminders()
+                let granted = try await store.requestFullAccessToReminders()
+                if granted {
+                    await resetEventStoreCache()
+                }
+                return granted
             } catch {
                 print("Reminders access request failed: \(error)")
                 return false
             }
         } else {
-            return await withCheckedContinuation { continuation in
+            let granted = await withCheckedContinuation { continuation in
                 store.requestAccess(to: .reminder) { granted, error in
                     if let error = error {
                         print("Reminders access request failed: \(error)")
@@ -160,6 +186,10 @@ final class EventKitManager: @unchecked Sendable {
                     continuation.resume(returning: granted)
                 }
             }
+            if granted {
+                await resetEventStoreCache()
+            }
+            return granted
         }
     }
 
@@ -315,39 +345,66 @@ final class EventKitManager: @unchecked Sendable {
             return []
         }
 
-        return await withCheckedContinuation { continuation in
-            accessQueue.async {
-                let predicate = self.eventStore.predicateForIncompleteReminders(
-                    withDueDateStarting: nil,
-                    ending: Calendar.current.date(byAdding: .day, value: 30, to: Date()),
-                    calendars: nil
-                )
+        // Use a task group with timeout to prevent indefinite hangs
+        do {
+            return try await withThrowingTaskGroup(of: [Reminder].self) { group in
+                // Task 1: Fetch reminders
+                group.addTask {
+                    await withCheckedContinuation { continuation in
+                        self.accessQueue.async {
+                            let predicate = self.eventStore.predicateForIncompleteReminders(
+                                withDueDateStarting: nil,
+                                ending: Calendar.current.date(byAdding: .day, value: 30, to: Date()),
+                                calendars: nil
+                            )
 
-                self.eventStore.fetchReminders(matching: predicate) { ekReminders in
-                    guard let ekReminders = ekReminders else {
-                        continuation.resume(returning: [])
-                        return
+                            self.eventStore.fetchReminders(matching: predicate) { ekReminders in
+                                guard let ekReminders = ekReminders else {
+                                    continuation.resume(returning: [])
+                                    return
+                                }
+
+                                let reminders = ekReminders.prefix(limit).map { reminder in
+                                    var dueDateStr: String?
+                                    if let dueDate = reminder.dueDateComponents?.date {
+                                        dueDateStr = SharedDateFormatters.mediumDateTime.string(from: dueDate)
+                                    }
+
+                                    return Reminder(
+                                        id: reminder.calendarItemIdentifier,
+                                        title: reminder.title ?? "Untitled",
+                                        notes: reminder.notes,
+                                        dueDate: dueDateStr,
+                                        isCompleted: reminder.isCompleted,
+                                        priority: reminder.priority
+                                    )
+                                }
+
+                                continuation.resume(returning: Array(reminders))
+                            }
+                        }
                     }
-
-                    let reminders = ekReminders.prefix(limit).map { reminder in
-                    var dueDateStr: String?
-                    if let dueDate = reminder.dueDateComponents?.date {
-                        dueDateStr = SharedDateFormatters.mediumDateTime.string(from: dueDate)
-                    }
-
-                        return Reminder(
-                            id: reminder.calendarItemIdentifier,
-                            title: reminder.title ?? "Untitled",
-                            notes: reminder.notes,
-                            dueDate: dueDateStr,
-                            isCompleted: reminder.isCompleted,
-                            priority: reminder.priority
-                        )
-                    }
-
-                    continuation.resume(returning: Array(reminders))
                 }
+
+                // Task 2: Timeout after 5 seconds
+                group.addTask {
+                    try await Task.sleep(for: .seconds(5))
+                    throw EventKitError.timeout
+                }
+
+                // Return the first to complete, cancel the other
+                if let result = try await group.next() {
+                    group.cancelAll()
+                    return result
+                }
+                return []
             }
+        } catch is EventKitError {
+            print("Reminders fetch timed out after 5 seconds")
+            return []
+        } catch {
+            print("Reminders fetch error: \(error)")
+            return []
         }
     }
 
@@ -430,6 +487,7 @@ final class EventKitManager: @unchecked Sendable {
 enum EventKitError: LocalizedError {
     case notAuthorized
     case notFound
+    case timeout
     case unknown
 
     var errorDescription: String? {
@@ -438,6 +496,8 @@ enum EventKitError: LocalizedError {
             return "Calendar/Reminders access not authorized"
         case .notFound:
             return "Item not found"
+        case .timeout:
+            return "Operation timed out"
         case .unknown:
             return "Unknown error"
         }

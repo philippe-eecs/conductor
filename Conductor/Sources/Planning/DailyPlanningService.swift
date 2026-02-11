@@ -72,7 +72,6 @@ final class DailyPlanningService: ObservableObject {
 
         let response = try await ClaudeService.shared.sendMessage(
             prompt,
-            context: nil,  // We've built custom context
             history: [],
             toolsEnabled: false,
             modelOverride: planningModel
@@ -104,7 +103,6 @@ final class DailyPlanningService: ObservableObject {
 
         let response = try await ClaudeService.shared.sendMessage(
             prompt,
-            context: nil,
             history: [],
             toolsEnabled: false,
             modelOverride: planningModel
@@ -135,7 +133,6 @@ final class DailyPlanningService: ObservableObject {
 
         let response = try await ClaudeService.shared.sendMessage(
             prompt,
-            context: nil,
             history: [],
             toolsEnabled: false,
             modelOverride: planningModel
@@ -166,7 +163,6 @@ final class DailyPlanningService: ObservableObject {
 
         let response = try await ClaudeService.shared.sendMessage(
             prompt,
-            context: nil,
             history: [],
             toolsEnabled: false,
             modelOverride: planningModel
@@ -394,6 +390,46 @@ final class DailyPlanningService: ObservableObject {
 
         // Completion rate
         prompt += "\n## Last 7 Days:\nGoal completion rate: \(Int(context.completionRate * 100))%\n"
+
+        // Active themes with task counts
+        if let themes = try? database.getThemes(), !themes.isEmpty {
+            prompt += "\n## Active Themes:\n"
+            for theme in themes {
+                let count = (try? database.getTaskCountForTheme(id: theme.id)) ?? 0
+                prompt += "- \(theme.name)"
+                if count > 0 { prompt += " (\(count) tasks)" }
+                if let desc = theme.themeDescription { prompt += " — \(desc)" }
+                prompt += "\n"
+            }
+        }
+
+        // Email triage summary
+        if let emails = try? database.getProcessedEmails(filter: .actionNeeded, limit: 5), !emails.isEmpty {
+            prompt += "\n## Email Triage:\n"
+            prompt += "Action-needed emails: \(emails.count)\n"
+            for email in emails.prefix(3) {
+                prompt += "- [\(email.severity.rawValue)] \(email.sender): \(email.subject)"
+                if let summary = email.aiSummary { prompt += " — \(summary)" }
+                prompt += "\n"
+            }
+        }
+
+        // Behavioral insights
+        if let insights = BehaviorAnalyzer.shared.formatInsightsForPrompt() {
+            prompt += "\n\(insights)\n"
+        }
+
+        // Active agent tasks
+        if let agentTasks = try? database.getActiveAgentTasks(), !agentTasks.isEmpty {
+            prompt += "\n## Active Agent Tasks: \(agentTasks.count)\n"
+            for task in agentTasks.prefix(5) {
+                prompt += "- \(task.name) (\(task.triggerType.rawValue))"
+                if let nextRun = task.nextRun {
+                    prompt += " next: \(SharedDateFormatters.time24HourWithSeconds.string(from: nextRun))"
+                }
+                prompt += "\n"
+            }
+        }
 
         prompt += """
 

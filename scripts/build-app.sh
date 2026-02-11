@@ -45,8 +45,21 @@ cat > "$APP_DIR/Contents/Entitlements.plist" << 'EOF'
 </plist>
 EOF
 
-# Sign the app (ad-hoc for local use, or with identity for distribution)
-codesign --force --deep --sign - \
+# Prefer a stable signing identity so macOS privacy permissions (TCC) persist across rebuilds.
+# You can override via CONDUCTOR_CODESIGN_IDENTITY (e.g. "Apple Development: Name (TEAMID)").
+SIGN_IDENTITY="${CONDUCTOR_CODESIGN_IDENTITY:-${CODESIGN_IDENTITY:-}}"
+if [[ -z "$SIGN_IDENTITY" ]]; then
+    SIGN_IDENTITY="$(security find-identity -p codesigning -v 2>/dev/null | awk -F '\"' '/\"Apple Development: /{print $2; exit} /\"Developer ID Application: /{print $2; exit}')"
+fi
+if [[ -z "$SIGN_IDENTITY" ]]; then
+    SIGN_IDENTITY="-"
+    echo "codesign: No signing identity found; using ad-hoc signing (privacy prompts may re-appear after rebuilds)."
+else
+    echo "codesign: Using identity: $SIGN_IDENTITY"
+fi
+
+# Sign the app
+codesign --force --deep --sign "$SIGN_IDENTITY" \
     --entitlements "$APP_DIR/Contents/Entitlements.plist" \
     "$APP_DIR"
 

@@ -41,12 +41,15 @@ enum TaskGrouping: String, CaseIterable {
     }
 }
 
-/// TODO list view with sidebar and flexible grouping
+/// Focus list view with sidebar and flexible grouping
 struct TodoListView: View {
     @State private var selectedSmartList: SmartList? = .today
     @State private var selectedUserList: TaskList?
+    @State private var selectedFocusGroup: FocusGroup?
     @State private var tasks: [TodoTask] = []
     @State private var taskLists: [TaskList] = []
+    @State private var focusGroups: [FocusGroup] = []
+    @State private var showFocusGroupManagement = false
     @State private var grouping: TaskGrouping = .byTime
     @State private var showCompleted = false
     @State private var newTaskTitle = ""
@@ -54,6 +57,7 @@ struct TodoListView: View {
     @State private var showTaskDetail: TodoTask?
     @State private var isLoading = false
     @State private var selectedTaskId: String?
+    @State private var activeFocusGroup: FocusGroup?
 
     @ObservedObject private var undoManager = TaskUndoManager.shared
 
@@ -204,9 +208,74 @@ struct TodoListView: View {
                     .padding(.bottom, 4)
             }
 
+            // Focus Groups
+            Divider()
+                .padding(.vertical, 8)
+
+            Section {
+                ForEach(focusGroups) { group in
+                    HStack(spacing: 6) {
+                        // Active focus indicator
+                        if activeFocusGroup?.id == group.id {
+                            Circle()
+                                .fill(group.swiftUIColor)
+                                .frame(width: 8, height: 8)
+                                .overlay(
+                                    Circle()
+                                        .stroke(group.swiftUIColor, lineWidth: 2)
+                                        .scaleEffect(1.5)
+                                        .opacity(0.5)
+                                )
+                        }
+
+                        SidebarRow(
+                            title: group.name,
+                            icon: "target",
+                            color: group.swiftUIColor,
+                            count: countForFocusGroup(group.id),
+                            isSelected: selectedFocusGroup?.id == group.id
+                        ) {
+                            selectedFocusGroup = group
+                            selectedSmartList = nil
+                            selectedUserList = nil
+                            Task { await loadTasks() }
+                        }
+                    }
+                }
+
+                // Add focus group button
+                Button(action: { showFocusGroupManagement = true }) {
+                    Label("Manage Groups", systemImage: "ellipsis")
+                        .font(.callout)
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+            } header: {
+                HStack {
+                    Text("Focus Groups")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Button(action: { showFocusGroupManagement = true }) {
+                        Image(systemName: "plus")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 4)
+            }
+
             Spacer()
         }
         .background(Color(NSColor.controlBackgroundColor))
+        .sheet(isPresented: $showFocusGroupManagement) {
+            FocusGroupManagementView()
+        }
     }
 
     // MARK: - Main Content
@@ -238,7 +307,21 @@ struct TodoListView: View {
     private var headerView: some View {
         HStack {
             // Title
-            if let userList = selectedUserList {
+            if let group = selectedFocusGroup {
+                Image(systemName: "target")
+                    .foregroundColor(group.swiftUIColor)
+                Text(group.name)
+                    .font(.headline)
+                if activeFocusGroup?.id == group.id {
+                    Text("Active")
+                        .font(.caption2)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(group.swiftUIColor)
+                        .cornerRadius(4)
+                }
+            } else if let userList = selectedUserList {
                 Image(systemName: userList.icon)
                     .foregroundColor(userList.swiftUIColor)
                 Text(userList.name)
@@ -390,6 +473,8 @@ struct TodoListView: View {
             }
         } else if selectedUserList != nil {
             return "No tasks in this list.\nAdd one below!"
+        } else if selectedFocusGroup != nil {
+            return "No tasks in this focus group.\nLink tasks to see them here."
         }
         return "No tasks"
     }
@@ -424,11 +509,19 @@ struct TodoListView: View {
         defer { isLoading = false }
 
         taskLists = (try? Database.shared.getTaskLists()) ?? []
+        focusGroups = (try? Database.shared.getFocusGroups()) ?? []
+        activeFocusGroup = try? Database.shared.getActiveFocusGroup()
         await loadTasks()
     }
 
     private func loadTasks() async {
-        if let smartList = selectedSmartList {
+        if let group = selectedFocusGroup {
+            // Load tasks linked to this focus group
+            let groupItems = (try? Database.shared.getItemsForFocusGroup(id: group.id, type: .task)) ?? []
+            let taskIds = Set(groupItems.map(\.itemId))
+            let allTasks = (try? Database.shared.getAllTasks(includeCompleted: showCompleted)) ?? []
+            tasks = allTasks.filter { taskIds.contains($0.id) }
+        } else if let smartList = selectedSmartList {
             switch smartList {
             case .all:
                 tasks = (try? Database.shared.getAllTasks(includeCompleted: showCompleted)) ?? []
@@ -593,6 +686,10 @@ struct TodoListView: View {
     private func countForList(_ listId: String) -> Int {
         return (try? Database.shared.getTasksForList(listId, includeCompleted: false).count) ?? 0
     }
+
+    private func countForFocusGroup(_ groupId: String) -> Int {
+        return (try? Database.shared.getTaskCountForFocusGroup(id: groupId)) ?? 0
+    }
 }
 
 // MARK: - Sidebar Row
@@ -647,6 +744,8 @@ struct TaskRow: View {
     let onToggle: () -> Void
     let onTap: () -> Void
 
+    @State private var taskFocusGroups: [FocusGroup] = []
+
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             // Checkbox
@@ -688,10 +787,25 @@ struct TaskRow: View {
                             .font(.caption2)
                             .foregroundColor(.secondary)
                     }
+
+                    // Focus group chips
+                    ForEach(taskFocusGroups) { group in
+                        HStack(spacing: 2) {
+                            Circle()
+                                .fill(group.swiftUIColor)
+                                .frame(width: 6, height: 6)
+                            Text(group.name)
+                                .font(.caption2)
+                        }
+                        .foregroundColor(.secondary)
+                    }
                 }
             }
 
             Spacer()
+        }
+        .task {
+            taskFocusGroups = (try? Database.shared.getFocusGroupsForItem(itemType: .task, itemId: task.id)) ?? []
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)

@@ -1,12 +1,15 @@
 import SwiftUI
+import AppKit
 
 /// Calendar view mode
 enum CalendarViewMode: String, CaseIterable {
+    case agenda = "Agenda"
     case month = "Month"
     case week = "Week"
 
     var icon: String {
         switch self {
+        case .agenda: return "list.bullet.rectangle"
         case .month: return "calendar"
         case .week: return "calendar.day.timeline.left"
         }
@@ -15,12 +18,13 @@ enum CalendarViewMode: String, CaseIterable {
 
 /// Shows a proper calendar grid with events
 struct ScheduleTabView: View {
-    @State private var viewMode: CalendarViewMode = .month
+    @State private var viewMode: CalendarViewMode = .agenda
     @State private var selectedDate: Date = Date()
     @State private var currentMonth: Date = Date()
     @State private var monthEvents: [EventKitManager.CalendarEvent] = []
     @State private var weekEvents: [EventKitManager.CalendarEvent] = []
     @State private var selectedDayEvents: [EventKitManager.CalendarEvent] = []
+    @State private var selectedDayTasks: [TodoTask] = []
     @State private var isLoading = false
     @State private var showDayDetail = false
 
@@ -40,6 +44,8 @@ struct ScheduleTabView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 switch viewMode {
+                case .agenda:
+                    agendaView
                 case .month:
                     monthView
                 case .week:
@@ -52,24 +58,39 @@ struct ScheduleTabView: View {
             handleMoveCommand(direction)
         }
         .task {
-            await loadMonthEvents()
-            if viewMode == .week {
+            switch viewMode {
+            case .agenda, .week:
                 await loadWeekEvents()
+            case .month:
+                await loadMonthEvents()
             }
+            await loadSelectedDayTasks()
         }
         .onChange(of: currentMonth) { _, _ in
             Task {
-                await loadMonthEvents()
+                if viewMode == .month {
+                    await loadMonthEvents()
+                }
             }
         }
         .onChange(of: viewMode) { _, newMode in
-            if newMode == .week {
-                Task { await loadWeekEvents() }
+            Task {
+                switch newMode {
+                case .agenda, .week:
+                    await loadWeekEvents()
+                case .month:
+                    await loadMonthEvents()
+                }
+                await loadSelectedDayTasks()
             }
         }
         .onChange(of: selectedDate) { _, _ in
-            if viewMode == .week {
-                Task { await loadWeekEvents() }
+            currentMonth = selectedDate
+            Task {
+                if viewMode == .agenda || viewMode == .week {
+                    await loadWeekEvents()
+                }
+                await loadSelectedDayTasks()
             }
         }
         .sheet(isPresented: $showDayDetail) {
@@ -94,21 +115,21 @@ struct ScheduleTabView: View {
     private var headerView: some View {
         HStack {
             // Month navigation
-            Button(action: previousMonth) {
+            Button(action: previousPeriod) {
                 Image(systemName: "chevron.left")
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Previous month")
+            .accessibilityLabel(previousLabel)
 
-            Text(monthYearString)
+            Text(headerTitle)
                 .font(.headline)
                 .frame(minWidth: 120)
 
-            Button(action: nextMonth) {
+            Button(action: nextPeriod) {
                 Image(systemName: "chevron.right")
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Next month")
+            .accessibilityLabel(nextLabel)
 
             Spacer()
 
@@ -127,10 +148,169 @@ struct ScheduleTabView: View {
                 }
             }
             .pickerStyle(.segmented)
-            .frame(width: 80)
+            .frame(width: 120)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+
+    // MARK: - Agenda View
+
+    private var agendaView: some View {
+        VStack(spacing: 0) {
+            weekDayHeaders
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text(selectedDateString)
+                            .font(.subheadline)
+                            .fontWeight(.semibold)
+                        Spacer()
+                        agendaSummaryPill
+                    }
+
+                    agendaCalendarSection
+
+                    Divider()
+
+                    agendaTasksSection
+                }
+                .padding(12)
+            }
+        }
+    }
+
+    private var agendaSummaryPill: some View {
+        let auth = EventKitManager.shared.calendarAuthorizationStatus()
+        let dayEvents = eventsForDay(selectedDate)
+
+        let text: String = {
+            if auth != .fullAccess { return "No calendar access" }
+            if dayEvents.isEmpty { return "No events" }
+            return "\(dayEvents.count) event\(dayEvents.count == 1 ? "" : "s")"
+        }()
+
+        return Text(text)
+            .font(.caption)
+            .foregroundColor(.secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color(NSColor.controlBackgroundColor))
+            .cornerRadius(6)
+            .accessibilityLabel(text)
+    }
+
+    private var agendaCalendarSection: some View {
+        let auth = EventKitManager.shared.calendarAuthorizationStatus()
+        let dayEvents = eventsForDay(selectedDate)
+
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Schedule")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            if auth != .fullAccess {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Grant Full Access in System Settings to show your events here.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Button("Open Calendar Privacy Settings") {
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(NSColor.controlBackgroundColor))
+                .cornerRadius(8)
+            } else if dayEvents.isEmpty {
+                Text("No events")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(NSColor.controlBackgroundColor))
+                    .cornerRadius(8)
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(dayEvents, id: \.id) { event in
+                        EventRow(event: event)
+                            .onTapGesture {
+                                selectedDayEvents = dayEvents
+                                showDayDetail = true
+                            }
+                    }
+                }
+            }
+        }
+    }
+
+    private var agendaTasksSection: some View {
+        let tasks = selectedDayTasks
+
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Tasks")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Spacer()
+                if !tasks.isEmpty {
+                    Text("\(tasks.count)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            if tasks.isEmpty {
+                Text("No tasks due")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(NSColor.controlBackgroundColor))
+                    .cornerRadius(8)
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(tasks, id: \.id) { task in
+                        agendaTaskRow(task)
+                    }
+                }
+            }
+        }
+    }
+
+    private func agendaTaskRow(_ task: TodoTask) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: task.isCompleted ? "checkmark.circle.fill" : "circle")
+                .foregroundColor(task.isCompleted ? .green : .secondary)
+                .accessibilityLabel(task.isCompleted ? "Completed" : "Not completed")
+            VStack(alignment: .leading, spacing: 2) {
+                Text(task.title)
+                    .font(.callout)
+                    .lineLimit(1)
+                if let dueDate = task.dueDate {
+                    Text(SharedDateFormatters.shortDayDate.string(from: dueDate))
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+            Spacer()
+            if task.priority == .high {
+                Image(systemName: "flag.fill")
+                    .foregroundColor(.orange)
+                    .accessibilityLabel("High priority")
+            }
+        }
+        .padding(10)
+        .background(Color(NSColor.controlBackgroundColor))
+        .cornerRadius(8)
+        .accessibilityElement(children: .combine)
     }
 
     // MARK: - Month View
@@ -279,21 +459,25 @@ struct ScheduleTabView: View {
                 .frame(width: 44)
 
             ForEach(weekDays, id: \.self) { date in
-                VStack(spacing: 2) {
-                    Text(dayOfWeekString(date))
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                    Text(dayNumberString(date))
-                        .font(.callout)
-                        .fontWeight(calendar.isDateInToday(date) ? .bold : .regular)
-                        .foregroundColor(calendar.isDateInToday(date) ? .accentColor : .primary)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 6)
-                .background(calendar.isDate(date, inSameDayAs: selectedDate) ? Color.accentColor.opacity(0.1) : Color.clear)
-                .onTapGesture {
+                let count = eventsForDay(date).count
+                Button {
                     selectedDate = date
+                } label: {
+                    VStack(spacing: 2) {
+                        Text(dayOfWeekString(date))
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        Text(dayNumberString(date))
+                            .font(.callout)
+                            .fontWeight(calendar.isDateInToday(date) ? .bold : .regular)
+                            .foregroundColor(calendar.isDateInToday(date) ? .accentColor : .primary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+                    .background(calendar.isDate(date, inSameDayAs: selectedDate) ? Color.accentColor.opacity(0.1) : Color.clear)
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(SharedDateFormatters.fullDateNoYear.string(from: date)), \(count) event\(count == 1 ? "" : "s")")
             }
         }
     }
@@ -302,6 +486,33 @@ struct ScheduleTabView: View {
 
     private var monthYearString: String {
         SharedDateFormatters.monthYear.string(from: currentMonth)
+    }
+
+    private var headerTitle: String {
+        switch viewMode {
+        case .month:
+            return monthYearString
+        case .week, .agenda:
+            return weekRangeString(for: selectedDate)
+        }
+    }
+
+    private var previousLabel: String {
+        switch viewMode {
+        case .month:
+            return "Previous month"
+        case .week, .agenda:
+            return "Previous week"
+        }
+    }
+
+    private var nextLabel: String {
+        switch viewMode {
+        case .month:
+            return "Next month"
+        case .week, .agenda:
+            return "Next week"
+        }
     }
 
     private var selectedDateString: String {
@@ -359,6 +570,8 @@ struct ScheduleTabView: View {
 
     private var activeEvents: [EventKitManager.CalendarEvent] {
         switch viewMode {
+        case .agenda:
+            return weekEvents
         case .month:
             return monthEvents
         case .week:
@@ -380,15 +593,31 @@ struct ScheduleTabView: View {
         }
     }
 
-    private func previousMonth() {
-        if let newMonth = calendar.date(byAdding: .month, value: -1, to: currentMonth) {
-            currentMonth = newMonth
+    private func previousPeriod() {
+        switch viewMode {
+        case .month:
+            if let newMonth = calendar.date(byAdding: .month, value: -1, to: currentMonth) {
+                currentMonth = newMonth
+                selectedDate = newMonth
+            }
+        case .week, .agenda:
+            if let newDate = calendar.date(byAdding: .day, value: -7, to: selectedDate) {
+                selectedDate = newDate
+            }
         }
     }
 
-    private func nextMonth() {
-        if let newMonth = calendar.date(byAdding: .month, value: 1, to: currentMonth) {
-            currentMonth = newMonth
+    private func nextPeriod() {
+        switch viewMode {
+        case .month:
+            if let newMonth = calendar.date(byAdding: .month, value: 1, to: currentMonth) {
+                currentMonth = newMonth
+                selectedDate = newMonth
+            }
+        case .week, .agenda:
+            if let newDate = calendar.date(byAdding: .day, value: 7, to: selectedDate) {
+                selectedDate = newDate
+            }
         }
     }
 
@@ -418,6 +647,16 @@ struct ScheduleTabView: View {
         currentMonth = newDate
     }
 
+    private func weekRangeString(for date: Date) -> String {
+        guard let interval = calendar.dateInterval(of: .weekOfYear, for: date) else {
+            return SharedDateFormatters.monthYear.string(from: date)
+        }
+        let start = SharedDateFormatters.shortMonthDay.string(from: interval.start)
+        let endDate = calendar.date(byAdding: .day, value: -1, to: interval.end) ?? interval.end
+        let end = SharedDateFormatters.shortMonthDay.string(from: endDate)
+        return "\(start) – \(end)"
+    }
+
     private func loadMonthEvents() async {
         isLoading = true
         defer { isLoading = false }
@@ -443,6 +682,16 @@ struct ScheduleTabView: View {
         }
 
         weekEvents = await eventKitManager.getEvents(from: interval.start, to: interval.end)
+    }
+
+    private func loadSelectedDayTasks() async {
+        let date = selectedDate
+        let tasks = await Task.detached(priority: .utility) {
+            (try? Database.shared.getTasksForDay(date, includeCompleted: false, includeOverdue: true)) ?? []
+        }.value
+        await MainActor.run {
+            selectedDayTasks = tasks
+        }
     }
 }
 

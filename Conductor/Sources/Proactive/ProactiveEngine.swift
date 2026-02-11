@@ -21,7 +21,11 @@ final class ProactiveEngine {
         isRunning = true
 
         // Request notification permissions
-        requestNotificationPermission()
+        if RuntimeEnvironment.supportsUserNotifications {
+            requestNotificationPermission()
+        } else {
+            NSLog("ProactiveEngine notifications disabled (not running inside a .app bundle).")
+        }
 
         // Start event-driven scheduler (handles meeting warnings, daily/weekly/monthly jobs)
         eventScheduler.start()
@@ -90,6 +94,7 @@ final class ProactiveEngine {
     }
 
     private func sendNotification(_ alert: ProactiveAlert) async {
+        guard RuntimeEnvironment.supportsUserNotifications else { return }
         let content = UNMutableNotificationContent()
         content.title = alert.title
         content.body = alert.body

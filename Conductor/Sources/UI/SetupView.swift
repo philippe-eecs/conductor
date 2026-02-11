@@ -10,6 +10,9 @@ struct SetupView: View {
     @State private var calendarStatus: EventKitManager.AuthorizationStatus = .notDetermined
     @State private var remindersStatus: EventKitManager.AuthorizationStatus = .notDetermined
     @State private var isCheckingCLI: Bool = false
+    @State private var didAutoRequestCalendar: Bool = false
+    @State private var didAutoRequestReminders: Bool = false
+    @State private var showRunAsAppHelp: Bool = false
 
     enum SetupStep: Int, CaseIterable {
         case welcome
@@ -48,10 +51,16 @@ struct SetupView: View {
             navigationButtons
                 .padding()
         }
-        .frame(width: 400, height: 500)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(NSColor.windowBackgroundColor))
         .onAppear {
             refreshStatuses()
+        }
+        .task(id: currentStep) {
+            await autoRequestPermissionsIfNeeded()
+        }
+        .sheet(isPresented: $showRunAsAppHelp) {
+            runAsAppHelpSheet
         }
     }
 
@@ -189,7 +198,7 @@ struct SetupView: View {
         VStack(spacing: 24) {
             Image(systemName: "calendar")
                 .font(.system(size: 48))
-                .foregroundColor(calendarStatus == .fullAccess ? .green : .accentColor)
+                .foregroundColor((calendarStatus == .fullAccess || calendarStatus == .writeOnly) ? .green : .accentColor)
 
             Text("Calendar Access")
                 .font(.title2)
@@ -204,7 +213,7 @@ struct SetupView: View {
             permissionStatusView(
                 label: "Calendar",
                 status: calendarStatus,
-                onRequest: requestCalendarAccess,
+                onRequest: { Task { _ = await requestCalendarAccess() } },
                 systemSettingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars"
             )
         }
@@ -217,7 +226,7 @@ struct SetupView: View {
         VStack(spacing: 24) {
             Image(systemName: "checklist")
                 .font(.system(size: 48))
-                .foregroundColor(remindersStatus == .fullAccess ? .green : .accentColor)
+                .foregroundColor((remindersStatus == .fullAccess || remindersStatus == .writeOnly) ? .green : .accentColor)
 
             Text("Reminders Access")
                 .font(.title2)
@@ -232,7 +241,7 @@ struct SetupView: View {
             permissionStatusView(
                 label: "Reminders",
                 status: remindersStatus,
-                onRequest: requestRemindersAccess,
+                onRequest: { Task { _ = await requestRemindersAccess() } },
                 systemSettingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Reminders"
             )
         }
@@ -338,10 +347,30 @@ struct SetupView: View {
 
             // Action buttons
             if status == .notDetermined {
-                Button("Grant \(label) Access") {
-                    onRequest()
+                if RuntimeEnvironment.supportsTCCPrompts {
+                    Button("Grant \(label) Access") {
+                        onRequest()
+                    }
+                    .buttonStyle(.borderedProminent)
+                } else {
+                    VStack(spacing: 8) {
+                        Text("Permissions require running Conductor as a .app bundle (not swift run).")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+
+                        HStack(spacing: 10) {
+                            Button("Grant \(label) Access") {}
+                                .buttonStyle(.borderedProminent)
+                                .disabled(true)
+
+                            Button("How to run as .app") {
+                                showRunAsAppHelp = true
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
                 }
-                .buttonStyle(.borderedProminent)
             } else if status == .denied || status == .restricted {
                 VStack(spacing: 8) {
                     Text("Permission was denied. You can enable it in System Settings.")
@@ -356,6 +385,11 @@ struct SetupView: View {
                     }
                     .buttonStyle(.bordered)
                 }
+            } else if status == .writeOnly {
+                Text("Write-only access allows creating items but not reading your schedule/tasks. For schedule/context features, grant full access.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
             }
         }
     }
@@ -389,8 +423,8 @@ struct SetupView: View {
                     }
                     .buttonStyle(.bordered)
 
-                    if (currentStep == .calendarAccess && calendarStatus == .fullAccess) ||
-                       (currentStep == .remindersAccess && remindersStatus == .fullAccess) {
+                    if (currentStep == .calendarAccess && (calendarStatus == .fullAccess || calendarStatus == .writeOnly)) ||
+                       (currentStep == .remindersAccess && (remindersStatus == .fullAccess || remindersStatus == .writeOnly)) {
                         Button("Continue") {
                             withAnimation {
                                 goToNextStep()
@@ -446,7 +480,7 @@ struct SetupView: View {
         case .fullAccess:
             return "Full Access"
         case .writeOnly:
-            return "Write Only"
+            return "Write Only (Limited)"
         case .notDetermined:
             return "Not Requested"
         case .denied:
@@ -494,21 +528,73 @@ struct SetupView: View {
         }
     }
 
-    private func requestCalendarAccess() {
-        Task {
-            _ = await EventKitManager.shared.requestCalendarAccess()
-            await MainActor.run {
-                calendarStatus = EventKitManager.shared.calendarAuthorizationStatus()
-            }
+    @MainActor
+    private func requestCalendarAccess() async -> Bool {
+        let granted = await EventKitManager.shared.requestCalendarAccess()
+        calendarStatus = EventKitManager.shared.calendarAuthorizationStatus()
+        if granted {
+            try? Database.shared.setPreference(key: "calendar_read_enabled", value: "true")
+        }
+        return granted
+    }
+
+    @MainActor
+    private func requestRemindersAccess() async -> Bool {
+        let granted = await EventKitManager.shared.requestRemindersAccess()
+        remindersStatus = EventKitManager.shared.remindersAuthorizationStatus()
+        if granted {
+            try? Database.shared.setPreference(key: "reminders_read_enabled", value: "true")
+        }
+        return granted
+    }
+
+    @MainActor
+    private func autoRequestPermissionsIfNeeded() async {
+        guard RuntimeEnvironment.supportsTCCPrompts else { return }
+
+        switch currentStep {
+        case .calendarAccess:
+            guard calendarStatus == .notDetermined, !didAutoRequestCalendar else { return }
+            didAutoRequestCalendar = true
+            _ = await requestCalendarAccess()
+        case .remindersAccess:
+            guard remindersStatus == .notDetermined, !didAutoRequestReminders else { return }
+            didAutoRequestReminders = true
+            _ = await requestRemindersAccess()
+        default:
+            break
         }
     }
 
-    private func requestRemindersAccess() {
-        Task {
-            _ = await EventKitManager.shared.requestRemindersAccess()
-            await MainActor.run {
-                remindersStatus = EventKitManager.shared.remindersAuthorizationStatus()
+    private var runAsAppHelpSheet: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Testing Permissions")
+                .font(.title2)
+                .fontWeight(.semibold)
+
+            Text("macOS Calendar/Reminders permission prompts require Conductor to run as a real .app bundle. Launching with swift run can't show these prompts and may crash system frameworks.")
+                .font(.body)
+                .foregroundColor(.secondary)
+
+            Text("Run:")
+                .font(.headline)
+
+            Text("scripts/dev-run-app.sh")
+                .font(.system(.body, design: .monospaced))
+                .textSelection(.enabled)
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(NSColor.controlBackgroundColor))
+                .cornerRadius(8)
+
+            Spacer()
+
+            HStack {
+                Spacer()
+                Button("Close") { showRunAsAppHelp = false }
+                    .buttonStyle(.borderedProminent)
             }
         }
+        .padding()
     }
 }

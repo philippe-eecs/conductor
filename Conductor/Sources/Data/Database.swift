@@ -20,6 +20,12 @@ final class Database {
     private var goalStore: GoalStore { GoalStore(database: self) }
     private var productivityStatsStore: ProductivityStatsStore { ProductivityStatsStore(database: self) }
     private var taskStore: TaskStore { TaskStore(database: self) }
+    private var contextLibraryStore: ContextLibraryStore { ContextLibraryStore(database: self) }
+    private var agentTaskStore: AgentTaskStore { AgentTaskStore(database: self) }
+    private var emailStore: EmailStore { EmailStore(database: self) }
+    private var themeStore: ThemeStore { ThemeStore(database: self) }
+    private var behaviorStore: BehaviorStore { BehaviorStore(database: self) }
+    private var focusGroupStore: FocusGroupStore { FocusGroupStore(database: self) }
 
     private init() {
         configureAccessQueue()
@@ -88,6 +94,12 @@ final class Database {
             try GoalStore.createTables(in: db)
             try ProductivityStatsStore.createTables(in: db)
             try TaskStore.createTables(in: db)
+            try ContextLibraryStore.createTables(in: db)
+            try AgentTaskStore.createTables(in: db)
+            try EmailStore.createTables(in: db)
+            try ThemeStore.createTables(in: db)
+            try BehaviorStore.createTables(in: db)
+            try FocusGroupStore.createTables(in: db)
         }
     }
 
@@ -319,6 +331,10 @@ final class Database {
         try taskStore.getTodayTasks(includeCompleted: includeCompleted)
     }
 
+    func getTasksForDay(_ date: Date, includeCompleted: Bool = false, includeOverdue: Bool = true) throws -> [TodoTask] {
+        try taskStore.getTasksForDay(date, includeCompleted: includeCompleted, includeOverdue: includeOverdue)
+    }
+
     func getScheduledTasks(includeCompleted: Bool = false) throws -> [TodoTask] {
         try taskStore.getScheduledTasks(includeCompleted: includeCompleted)
     }
@@ -329,6 +345,255 @@ final class Database {
 
     func toggleTaskCompleted(id: String) throws {
         try taskStore.toggleTaskCompleted(id: id)
+    }
+
+    // MARK: - Context Library
+
+    func saveContextLibraryItem(_ item: ContextLibraryItem) throws {
+        try contextLibraryStore.save(item: item)
+    }
+
+    func updateContextLibraryItem(id: String, title: String? = nil, content: String? = nil, autoInclude: Bool? = nil) throws {
+        try contextLibraryStore.update(id: id, title: title, content: content, autoInclude: autoInclude)
+    }
+
+    func getAllContextLibraryItems() throws -> [ContextLibraryItem] {
+        try contextLibraryStore.getAll()
+    }
+
+    func getAutoIncludeContextLibraryItems() throws -> [ContextLibraryItem] {
+        try contextLibraryStore.getAutoIncludeItems()
+    }
+
+    func getContextLibraryItem(id: String) throws -> ContextLibraryItem? {
+        try contextLibraryStore.get(id: id)
+    }
+
+    func deleteContextLibraryItem(id: String) throws {
+        try contextLibraryStore.delete(id: id)
+    }
+
+    func getContextLibraryItemCount() throws -> Int {
+        try contextLibraryStore.count()
+    }
+    // MARK: - Agent Tasks
+
+    func createAgentTask(_ task: AgentTask) throws {
+        try agentTaskStore.createAgentTask(task)
+    }
+
+    func getAgentTask(id: String) throws -> AgentTask? {
+        try agentTaskStore.getAgentTask(id: id)
+    }
+
+    func getActiveAgentTasks() throws -> [AgentTask] {
+        try agentTaskStore.getActiveAgentTasks()
+    }
+
+    func getAllAgentTasks() throws -> [AgentTask] {
+        try agentTaskStore.getAllAgentTasks()
+    }
+
+    func getDueAgentTasks() throws -> [AgentTask] {
+        try agentTaskStore.getDueTasks()
+    }
+
+    func updateAgentTask(_ task: AgentTask) throws {
+        try agentTaskStore.updateAgentTask(task)
+    }
+
+    func deleteAgentTask(id: String) throws {
+        try agentTaskStore.deleteAgentTask(id: id)
+    }
+
+    func saveAgentTaskResult(_ result: AgentTaskResult) throws {
+        try agentTaskStore.saveResult(result)
+    }
+
+    func getRecentAgentTaskResults(limit: Int = 20) throws -> [AgentTaskResult] {
+        try agentTaskStore.getRecentResults(limit: limit)
+    }
+
+    func getPendingApprovalResults() throws -> [AgentTaskResult] {
+        try agentTaskStore.getPendingApprovalResults()
+    }
+
+    // MARK: - Processed Emails
+
+    func saveProcessedEmail(_ email: ProcessedEmail) throws {
+        try emailStore.saveProcessedEmail(email)
+    }
+
+    func saveProcessedEmails(_ emails: [ProcessedEmail]) throws {
+        try emailStore.saveBatch(emails)
+    }
+
+    func getProcessedEmails(filter: EmailFilter = .all, limit: Int = 50) throws -> [ProcessedEmail] {
+        try emailStore.getProcessedEmails(filter: filter, limit: limit)
+    }
+
+    func getEmailActionNeededCount() throws -> Int {
+        try emailStore.getActionNeededCount()
+    }
+
+    func dismissProcessedEmail(id: String) throws {
+        try emailStore.dismissEmail(id: id)
+    }
+
+    // MARK: - Themes
+
+    func createTheme(_ theme: Theme) throws {
+        try themeStore.createTheme(theme)
+    }
+
+    func getThemes(includeArchived: Bool = false) throws -> [Theme] {
+        try themeStore.getThemes(includeArchived: includeArchived)
+    }
+
+    func getTheme(id: String) throws -> Theme? {
+        try themeStore.getTheme(id: id)
+    }
+
+    func updateTheme(_ theme: Theme) throws {
+        try themeStore.updateTheme(theme)
+    }
+
+    func archiveTheme(id: String) throws {
+        try themeStore.archiveTheme(id: id)
+    }
+
+    func deleteTheme(id: String) throws {
+        try themeStore.deleteTheme(id: id)
+    }
+
+    func addItemToTheme(themeId: String, itemType: ThemeItemType, itemId: String) throws {
+        try themeStore.addItemToTheme(themeId: themeId, itemType: itemType, itemId: itemId)
+    }
+
+    func removeItemFromTheme(themeId: String, itemType: ThemeItemType, itemId: String) throws {
+        try themeStore.removeItemFromTheme(themeId: themeId, itemType: itemType, itemId: itemId)
+    }
+
+    func getItemsForTheme(id themeId: String, type: ThemeItemType? = nil) throws -> [ThemeItem] {
+        try themeStore.getItemsForTheme(id: themeId, type: type)
+    }
+
+    func getThemesForItem(itemType: ThemeItemType, itemId: String) throws -> [Theme] {
+        try themeStore.getThemesForItem(itemType: itemType, itemId: itemId)
+    }
+
+    func getTaskCountForTheme(id themeId: String) throws -> Int {
+        try themeStore.getTaskCountForTheme(id: themeId)
+    }
+
+    func addThemeKeyword(_ keyword: String, toTheme themeId: String) throws {
+        try themeStore.addKeyword(keyword, toTheme: themeId)
+    }
+
+    func getThemeKeywords(forTheme themeId: String) throws -> [String] {
+        try themeStore.getKeywords(forTheme: themeId)
+    }
+
+    func removeThemeKeyword(_ keyword: String, fromTheme themeId: String) throws {
+        try themeStore.removeKeyword(keyword, fromTheme: themeId)
+    }
+
+    // MARK: - Behavior Tracking
+
+    func recordBehaviorEvent(type: BehaviorEventType, entityId: String? = nil, metadata: [String: String] = [:]) throws {
+        try behaviorStore.recordEvent(type: type, entityId: entityId, metadata: metadata)
+    }
+
+    func getBehaviorEvents(type: BehaviorEventType? = nil, since: Date? = nil, limit: Int = 100) throws -> [BehaviorEvent] {
+        try behaviorStore.getEvents(type: type, since: since, limit: limit)
+    }
+
+    // MARK: - Focus Groups
+
+    func createFocusGroup(_ group: FocusGroup) throws {
+        try focusGroupStore.createFocusGroup(group)
+    }
+
+    func getFocusGroups(includeArchived: Bool = false) throws -> [FocusGroup] {
+        try focusGroupStore.getFocusGroups(includeArchived: includeArchived)
+    }
+
+    func getFocusGroup(id: String) throws -> FocusGroup? {
+        try focusGroupStore.getFocusGroup(id: id)
+    }
+
+    func updateFocusGroup(_ group: FocusGroup) throws {
+        try focusGroupStore.updateFocusGroup(group)
+    }
+
+    func archiveFocusGroup(id: String) throws {
+        try focusGroupStore.archiveFocusGroup(id: id)
+    }
+
+    func deleteFocusGroup(id: String) throws {
+        try focusGroupStore.deleteFocusGroup(id: id)
+    }
+
+    // MARK: - Focus Blocks
+
+    func createFocusBlock(_ block: FocusBlock) throws {
+        try focusGroupStore.createFocusBlock(block)
+    }
+
+    func getFocusBlocksForGroup(id groupId: String) throws -> [FocusBlock] {
+        try focusGroupStore.getFocusBlocksForGroup(id: groupId)
+    }
+
+    func getFocusBlocksForDay(_ date: Date) throws -> [FocusBlock] {
+        try focusGroupStore.getFocusBlocksForDay(date)
+    }
+
+    func updateFocusBlock(_ block: FocusBlock) throws {
+        try focusGroupStore.updateFocusBlock(block)
+    }
+
+    func deleteFocusBlock(id: String) throws {
+        try focusGroupStore.deleteFocusBlock(id: id)
+    }
+
+    func getActiveFocusGroup(at date: Date = Date()) throws -> FocusGroup? {
+        try focusGroupStore.getActiveFocusGroup(at: date)
+    }
+
+    // MARK: - Focus Group Items
+
+    func addItemToFocusGroup(groupId: String, itemType: FocusGroupItemType, itemId: String) throws {
+        try focusGroupStore.addItemToFocusGroup(groupId: groupId, itemType: itemType, itemId: itemId)
+    }
+
+    func removeItemFromFocusGroup(groupId: String, itemType: FocusGroupItemType, itemId: String) throws {
+        try focusGroupStore.removeItemFromFocusGroup(groupId: groupId, itemType: itemType, itemId: itemId)
+    }
+
+    func getItemsForFocusGroup(id groupId: String, type: FocusGroupItemType? = nil) throws -> [FocusGroupItem] {
+        try focusGroupStore.getItemsForFocusGroup(id: groupId, type: type)
+    }
+
+    func getFocusGroupsForItem(itemType: FocusGroupItemType, itemId: String) throws -> [FocusGroup] {
+        try focusGroupStore.getFocusGroupsForItem(itemType: itemType, itemId: itemId)
+    }
+
+    func getTaskCountForFocusGroup(id groupId: String) throws -> Int {
+        try focusGroupStore.getTaskCountForFocusGroup(id: groupId)
+    }
+
+    // MARK: - Focus Group Keywords
+
+    func addFocusGroupKeyword(_ keyword: String, toFocusGroup groupId: String) throws {
+        try focusGroupStore.addKeyword(keyword, toFocusGroup: groupId)
+    }
+
+    func getFocusGroupKeywords(forFocusGroup groupId: String) throws -> [String] {
+        try focusGroupStore.getKeywords(forFocusGroup: groupId)
+    }
+
+    func removeFocusGroupKeyword(_ keyword: String, fromFocusGroup groupId: String) throws {
+        try focusGroupStore.removeKeyword(keyword, fromFocusGroup: groupId)
     }
 }
 
