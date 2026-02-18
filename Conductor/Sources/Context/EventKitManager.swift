@@ -4,15 +4,10 @@ import Foundation
 final class EventKitManager: @unchecked Sendable {
     static let shared = EventKitManager()
 
-    // EKEventStore is not documented as thread-safe. Conductor queries calendar/reminders
-    // from various async contexts, so we serialize all EKEventStore usage through one queue.
     private let accessQueue = DispatchQueue(label: "com.conductor.eventkit")
-    private let accessQueueKey = DispatchSpecificKey<UInt8>()
     private let eventStore = EKEventStore()
 
-    private init() {
-        accessQueue.setSpecific(key: accessQueueKey, value: 1)
-    }
+    private init() {}
 
     private func perform<T>(_ body: @escaping (EKEventStore) throws -> T) async throws -> T {
         try await withCheckedThrowingContinuation { continuation in
@@ -36,160 +31,64 @@ final class EventKitManager: @unchecked Sendable {
     }
 
     private func resetEventStoreCache() async {
-        await perform { store in
-            store.reset()
-        }
+        await perform { store in store.reset() }
     }
 
     // MARK: - Authorization
 
     enum AuthorizationStatus {
-        case notDetermined
-        case restricted
-        case denied
-        case fullAccess
-        case writeOnly
+        case notDetermined, restricted, denied, fullAccess, writeOnly
     }
 
     func calendarAuthorizationStatus() -> AuthorizationStatus {
-        if #available(macOS 14.0, *) {
-            switch EKEventStore.authorizationStatus(for: .event) {
-            case .notDetermined:
-                return .notDetermined
-            case .restricted:
-                return .restricted
-            case .denied:
-                return .denied
-            case .fullAccess:
-                return .fullAccess
-            case .writeOnly:
-                return .writeOnly
-            @unknown default:
-                return .denied
-            }
-        } else {
-            switch EKEventStore.authorizationStatus(for: .event) {
-            case .notDetermined:
-                return .notDetermined
-            case .restricted:
-                return .restricted
-            case .denied:
-                return .denied
-            case .authorized:
-                return .fullAccess
-            case .fullAccess:
-                return .fullAccess
-            case .writeOnly:
-                return .writeOnly
-            @unknown default:
-                return .denied
-            }
-        }
+        mapStatus(EKEventStore.authorizationStatus(for: .event))
     }
 
     func remindersAuthorizationStatus() -> AuthorizationStatus {
-        if #available(macOS 14.0, *) {
-            switch EKEventStore.authorizationStatus(for: .reminder) {
-            case .notDetermined:
-                return .notDetermined
-            case .restricted:
-                return .restricted
-            case .denied:
-                return .denied
-            case .fullAccess:
-                return .fullAccess
-            case .writeOnly:
-                return .writeOnly
-            @unknown default:
-                return .denied
-            }
-        } else {
-            switch EKEventStore.authorizationStatus(for: .reminder) {
-            case .notDetermined:
-                return .notDetermined
-            case .restricted:
-                return .restricted
-            case .denied:
-                return .denied
-            case .authorized:
-                return .fullAccess
-            case .fullAccess:
-                return .fullAccess
-            case .writeOnly:
-                return .writeOnly
-            @unknown default:
-                return .denied
-            }
+        mapStatus(EKEventStore.authorizationStatus(for: .reminder))
+    }
+
+    private func mapStatus(_ status: EKAuthorizationStatus) -> AuthorizationStatus {
+        switch status {
+        case .notDetermined: return .notDetermined
+        case .restricted: return .restricted
+        case .denied: return .denied
+        case .fullAccess: return .fullAccess
+        case .writeOnly: return .writeOnly
+        case .authorized: return .fullAccess
+        @unknown default: return .denied
         }
     }
 
     func requestCalendarAccess() async -> Bool {
         guard RuntimeEnvironment.supportsTCCPrompts else {
-            Log.eventKit.info("Calendar access request skipped (not running inside a .app bundle)")
+            Log.eventKit.info("Calendar access request skipped (not in .app bundle)")
             return false
         }
-        // Use a dedicated store for requesting permission so we don't race with
-        // concurrent reads/writes on our serialized `eventStore`.
         let store = EKEventStore()
-        if #available(macOS 14.0, *) {
-            do {
-                let granted = try await store.requestFullAccessToEvents()
-                if granted {
-                    await resetEventStoreCache()
-                }
-                return granted
-            } catch {
-                Log.eventKit.error("Calendar access request failed: \(error.localizedDescription, privacy: .public)")
-                return false
-            }
-        } else {
-            let granted = await withCheckedContinuation { continuation in
-                store.requestAccess(to: .event) { granted, error in
-                    if let error = error {
-                        Log.eventKit.error("Calendar access request failed: \(error.localizedDescription, privacy: .public)")
-                    }
-                    continuation.resume(returning: granted)
-                }
-            }
-            if granted {
-                await resetEventStoreCache()
-            }
+        do {
+            let granted = try await store.requestFullAccessToEvents()
+            if granted { await resetEventStoreCache() }
             return granted
+        } catch {
+            Log.eventKit.error("Calendar access request failed: \(error.localizedDescription, privacy: .public)")
+            return false
         }
     }
 
     func requestRemindersAccess() async -> Bool {
         guard RuntimeEnvironment.supportsTCCPrompts else {
-            Log.eventKit.info("Reminders access request skipped (not running inside a .app bundle)")
+            Log.eventKit.info("Reminders access request skipped (not in .app bundle)")
             return false
         }
-        // Use a dedicated store for requesting permission so we don't race with
-        // concurrent reads/writes on our serialized `eventStore`.
         let store = EKEventStore()
-        if #available(macOS 14.0, *) {
-            do {
-                let granted = try await store.requestFullAccessToReminders()
-                if granted {
-                    await resetEventStoreCache()
-                }
-                return granted
-            } catch {
-                Log.eventKit.error("Reminders access request failed: \(error.localizedDescription, privacy: .public)")
-                return false
-            }
-        } else {
-            let granted = await withCheckedContinuation { continuation in
-                store.requestAccess(to: .reminder) { granted, error in
-                    if let error = error {
-                        Log.eventKit.error("Reminders access request failed: \(error.localizedDescription, privacy: .public)")
-                    }
-                    continuation.resume(returning: granted)
-                }
-            }
-            if granted {
-                await resetEventStoreCache()
-            }
+        do {
+            let granted = try await store.requestFullAccessToReminders()
+            if granted { await resetEventStoreCache() }
             return granted
+        } catch {
+            Log.eventKit.error("Reminders access request failed: \(error.localizedDescription, privacy: .public)")
+            return false
         }
     }
 
@@ -205,44 +104,25 @@ final class EventKitManager: @unchecked Sendable {
         let isAllDay: Bool
 
         var time: String {
-            if isAllDay {
-                return "All day"
-            }
-            return SharedDateFormatters.shortTime.string(from: startDate)
+            isAllDay ? "All day" : SharedDateFormatters.shortTime.string(from: startDate)
         }
 
         var duration: String {
             let interval = endDate.timeIntervalSince(startDate)
             let hours = Int(interval) / 3600
             let minutes = Int(interval) % 3600 / 60
-
-            if hours > 0 && minutes > 0 {
-                return "\(hours)h \(minutes)m"
-            } else if hours > 0 {
-                return "\(hours)h"
-            } else {
-                return "\(minutes)m"
-            }
+            if hours > 0 && minutes > 0 { return "\(hours)h \(minutes)m" }
+            else if hours > 0 { return "\(hours)h" }
+            else { return "\(minutes)m" }
         }
     }
 
-    /// Fetches calendar events in a date range.
-    /// Note: This returns an empty list if calendar access isn't granted.
     func getEvents(from startDate: Date, to endDate: Date) async -> [CalendarEvent] {
-        guard calendarAuthorizationStatus() == .fullAccess else {
-            return []
-        }
+        guard calendarAuthorizationStatus() == .fullAccess else { return [] }
 
         return await perform { store in
-            let predicate = store.predicateForEvents(
-                withStart: startDate,
-                end: endDate,
-                calendars: nil
-            )
-
-            let events = store.events(matching: predicate)
-
-            return events.map { event in
+            let predicate = store.predicateForEvents(withStart: startDate, end: endDate, calendars: nil)
+            return store.events(matching: predicate).map { event in
                 CalendarEvent(
                     id: event.eventIdentifier,
                     title: event.title ?? "Untitled",
@@ -258,44 +138,9 @@ final class EventKitManager: @unchecked Sendable {
 
     func getTodayEvents() async -> [CalendarEvent] {
         let calendar = Calendar.current
-        let startOfDay = calendar.startOfDay(for: Date())
-        let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
-        return await getEvents(from: startOfDay, to: endOfDay)
-    }
-
-    func getUpcomingEvents(days: Int = 7) async -> [CalendarEvent] {
-        let calendar = Calendar.current
-        let startDate = Date()
-        let endDate = calendar.date(byAdding: .day, value: days, to: startDate)!
-        return await getEvents(from: startDate, to: endDate)
-    }
-
-    /// Get events for an entire month
-    func getMonthEvents(for date: Date) async -> [CalendarEvent] {
-        let calendar = Calendar.current
-        guard let startOfMonth = calendar.date(from: calendar.dateComponents([.year, .month], from: date)),
-              let endOfMonth = calendar.date(byAdding: .month, value: 1, to: startOfMonth) else {
-            return []
-        }
-        return await getEvents(from: startOfMonth, to: endOfMonth)
-    }
-
-    /// Get events for a specific week
-    func getWeekEvents(for date: Date) async -> [CalendarEvent] {
-        let calendar = Calendar.current
-        guard let interval = calendar.dateInterval(of: .weekOfYear, for: date) else {
-            return []
-        }
-        return await getEvents(from: interval.start, to: interval.end)
-    }
-
-    /// Get events for a specific day
-    func getEventsForDay(_ date: Date) async -> [CalendarEvent] {
-        let calendar = Calendar.current
-        guard let interval = calendar.dateInterval(of: .day, for: date) else {
-            return []
-        }
-        return await getEvents(from: interval.start, to: interval.end)
+        let start = calendar.startOfDay(for: Date())
+        let end = calendar.date(byAdding: .day, value: 1, to: start)!
+        return await getEvents(from: start, to: end)
     }
 
     func createCalendarEvent(
@@ -316,7 +161,6 @@ final class EventKitManager: @unchecked Sendable {
             event.endDate = endDate
             event.notes = notes
 
-            // Use default calendar or specified calendar
             if let calendarId = calendarIdentifier,
                let calendar = store.calendar(withIdentifier: calendarId) {
                 event.calendar = calendar
@@ -341,14 +185,10 @@ final class EventKitManager: @unchecked Sendable {
     }
 
     func getUpcomingReminders(limit: Int = 20) async -> [Reminder] {
-        guard remindersAuthorizationStatus() == .fullAccess else {
-            return []
-        }
+        guard remindersAuthorizationStatus() == .fullAccess else { return [] }
 
-        // Use a task group with timeout to prevent indefinite hangs
         do {
             return try await withThrowingTaskGroup(of: [Reminder].self) { group in
-                // Task 1: Fetch reminders
                 group.addTask {
                     await withCheckedContinuation { continuation in
                         self.accessQueue.async {
@@ -357,19 +197,16 @@ final class EventKitManager: @unchecked Sendable {
                                 ending: Calendar.current.date(byAdding: .day, value: 30, to: Date()),
                                 calendars: nil
                             )
-
                             self.eventStore.fetchReminders(matching: predicate) { ekReminders in
-                                guard let ekReminders = ekReminders else {
+                                guard let ekReminders else {
                                     continuation.resume(returning: [])
                                     return
                                 }
-
                                 let reminders = ekReminders.prefix(limit).map { reminder in
                                     var dueDateStr: String?
                                     if let dueDate = reminder.dueDateComponents?.date {
                                         dueDateStr = SharedDateFormatters.mediumDateTime.string(from: dueDate)
                                     }
-
                                     return Reminder(
                                         id: reminder.calendarItemIdentifier,
                                         title: reminder.title ?? "Untitled",
@@ -379,20 +216,17 @@ final class EventKitManager: @unchecked Sendable {
                                         priority: reminder.priority
                                     )
                                 }
-
                                 continuation.resume(returning: Array(reminders))
                             }
                         }
                     }
                 }
 
-                // Task 2: Timeout after 5 seconds
                 group.addTask {
                     try await Task.sleep(for: .seconds(5))
                     throw EventKitError.timeout
                 }
 
-                // Return the first to complete, cancel the other
                 if let result = try await group.next() {
                     group.cancelAll()
                     return result
@@ -400,106 +234,24 @@ final class EventKitManager: @unchecked Sendable {
                 return []
             }
         } catch is EventKitError {
-            Log.eventKit.warning("Reminders fetch timed out after 5 seconds")
+            Log.eventKit.warning("Reminders fetch timed out")
             return []
         } catch {
             Log.eventKit.error("Reminders fetch error: \(error.localizedDescription, privacy: .public)")
             return []
         }
     }
-
-    func createReminder(
-        title: String,
-        notes: String? = nil,
-        dueDate: Date? = nil,
-        priority: Int = 0
-    ) async throws -> String {
-        guard remindersAuthorizationStatus() == .fullAccess else {
-            throw EventKitError.notAuthorized
-        }
-        return try await perform { store in
-            let reminder = EKReminder(eventStore: store)
-            reminder.title = title
-            reminder.notes = notes
-            reminder.priority = priority
-
-            if let dueDate = dueDate {
-                let calendar = Calendar.current
-                reminder.dueDateComponents = calendar.dateComponents(
-                    [.year, .month, .day, .hour, .minute],
-                    from: dueDate
-                )
-            }
-
-            // Use default reminders list
-            reminder.calendar = store.defaultCalendarForNewReminders()
-
-            try store.save(reminder, commit: true)
-            return reminder.calendarItemIdentifier
-        }
-    }
-
-    func completeReminder(id: String) async throws {
-        guard remindersAuthorizationStatus() == .fullAccess else {
-            throw EventKitError.notAuthorized
-        }
-        return try await withCheckedThrowingContinuation { continuation in
-            accessQueue.async { [weak self] in
-                guard let self else {
-                    continuation.resume(throwing: EventKitError.unknown)
-                    return
-                }
-
-                let predicate = self.eventStore.predicateForReminders(in: nil)
-
-                self.eventStore.fetchReminders(matching: predicate) { [weak self] reminders in
-                    guard let self else {
-                        continuation.resume(throwing: EventKitError.unknown)
-                        return
-                    }
-
-                    guard let reminders,
-                          let reminder = reminders.first(where: { $0.calendarItemIdentifier == id }) else {
-                        continuation.resume(throwing: EventKitError.notFound)
-                        return
-                    }
-
-                    self.accessQueue.async { [weak self] in
-                        guard let self else {
-                            continuation.resume(throwing: EventKitError.unknown)
-                            return
-                        }
-
-                        reminder.isCompleted = true
-                        do {
-                            try self.eventStore.save(reminder, commit: true)
-                            continuation.resume()
-                        } catch {
-                            continuation.resume(throwing: error)
-                        }
-                    }
-                }
-            }
-        }
-    }
 }
 
 enum EventKitError: LocalizedError {
-    case notAuthorized
-    case notFound
-    case timeout
-    case unknown
+    case notAuthorized, notFound, timeout, unknown
 
     var errorDescription: String? {
         switch self {
-        case .notAuthorized:
-            return "Calendar/Reminders access not authorized"
-        case .notFound:
-            return "Item not found"
-        case .timeout:
-            return "Operation timed out"
-        case .unknown:
-            return "Unknown error"
+        case .notAuthorized: return "Calendar/Reminders access not authorized"
+        case .notFound: return "Item not found"
+        case .timeout: return "Operation timed out"
+        case .unknown: return "Unknown error"
         }
     }
 }

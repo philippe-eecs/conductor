@@ -1,0 +1,428 @@
+import Foundation
+
+final class MCPToolHandlers: @unchecked Sendable {
+
+    static let allowedToolNames: Set<String> = [
+        "conductor_get_calendar",
+        "conductor_get_reminders",
+        "conductor_get_projects",
+        "conductor_get_todos",
+        "conductor_create_todo",
+        "conductor_update_todo",
+        "conductor_create_project",
+        "conductor_create_calendar_block",
+        "conductor_dispatch_agent"
+    ]
+
+    static func toolDefinitions() -> [[String: Any]] {
+        [
+            [
+                "name": "conductor_get_calendar",
+                "description": "Get calendar events for a date range. Defaults to today.",
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "start_date": ["type": "string", "description": "Start date (YYYY-MM-DD). Defaults to today."],
+                        "end_date": ["type": "string", "description": "End date (YYYY-MM-DD). Defaults to start_date + 1 day."],
+                        "days": ["type": "integer", "description": "Number of days from start_date. Alternative to end_date."]
+                    ]
+                ]
+            ],
+            [
+                "name": "conductor_get_reminders",
+                "description": "Get upcoming incomplete reminders from Apple Reminders.",
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "limit": ["type": "integer", "description": "Max reminders to return (default 20)."]
+                    ]
+                ]
+            ],
+            [
+                "name": "conductor_get_projects",
+                "description": "List all projects with open TODO count.",
+                "inputSchema": ["type": "object", "properties": [:]]
+            ],
+            [
+                "name": "conductor_get_todos",
+                "description": "Get TODOs, optionally filtered by project.",
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "project_id": ["type": "integer", "description": "Filter by project ID. Omit for inbox or all."],
+                        "include_completed": ["type": "boolean", "description": "Include completed TODOs (default false)."]
+                    ]
+                ]
+            ],
+            [
+                "name": "conductor_create_todo",
+                "description": "Create a new TODO item.",
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "title": ["type": "string", "description": "TODO title (required)."],
+                        "priority": ["type": "integer", "description": "0=none, 1=low, 2=medium, 3=high"],
+                        "due_date": ["type": "string", "description": "Due date (YYYY-MM-DD)"],
+                        "project_id": ["type": "integer", "description": "Project ID to assign to"]
+                    ],
+                    "required": ["title"]
+                ]
+            ],
+            [
+                "name": "conductor_update_todo",
+                "description": "Update or complete a TODO.",
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "todo_id": ["type": "integer", "description": "TODO ID (required)"],
+                        "title": ["type": "string", "description": "New title"],
+                        "priority": ["type": "integer", "description": "New priority"],
+                        "completed": ["type": "boolean", "description": "Mark as complete"],
+                        "project_id": ["type": "integer", "description": "Move to project"]
+                    ],
+                    "required": ["todo_id"]
+                ]
+            ],
+            [
+                "name": "conductor_create_project",
+                "description": "Create a new project.",
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "name": ["type": "string", "description": "Project name (required)"],
+                        "color": ["type": "string", "description": "Hex color (e.g. #FF5733)"],
+                        "description": ["type": "string", "description": "Project description"]
+                    ],
+                    "required": ["name"]
+                ]
+            ],
+            [
+                "name": "conductor_create_calendar_block",
+                "description": "Create a calendar event for time blocking.",
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "title": ["type": "string", "description": "Event title (required)"],
+                        "start_time": ["type": "string", "description": "Start time ISO 8601 (required)"],
+                        "end_time": ["type": "string", "description": "End time ISO 8601 (required)"],
+                        "notes": ["type": "string", "description": "Event notes"]
+                    ],
+                    "required": ["title", "start_time", "end_time"]
+                ]
+            ],
+            [
+                "name": "conductor_dispatch_agent",
+                "description": "Dispatch an AI agent to work on a TODO. The agent runs in the background.",
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "todo_id": ["type": "integer", "description": "TODO ID to work on (required)"],
+                        "prompt": ["type": "string", "description": "Instructions for the agent (required)"]
+                    ],
+                    "required": ["todo_id", "prompt"]
+                ]
+            ]
+        ]
+    }
+
+    func handleToolCall(name: String, arguments: [String: Any]) async -> [String: Any] {
+        do {
+            switch name {
+            case "conductor_get_calendar":
+                return try await handleGetCalendar(arguments)
+            case "conductor_get_reminders":
+                return try await handleGetReminders(arguments)
+            case "conductor_get_projects":
+                return try handleGetProjects(arguments)
+            case "conductor_get_todos":
+                return try handleGetTodos(arguments)
+            case "conductor_create_todo":
+                return try handleCreateTodo(arguments)
+            case "conductor_update_todo":
+                return try handleUpdateTodo(arguments)
+            case "conductor_create_project":
+                return try handleCreateProject(arguments)
+            case "conductor_create_calendar_block":
+                return try await handleCreateCalendarBlock(arguments)
+            case "conductor_dispatch_agent":
+                return try await handleDispatchAgent(arguments)
+            default:
+                return errorResult("Unknown tool: \(name)")
+            }
+        } catch {
+            return errorResult(error.localizedDescription)
+        }
+    }
+
+    // MARK: - READ Tools
+
+    private func handleGetCalendar(_ args: [String: Any]) async throws -> [String: Any] {
+        let calendar = Calendar.current
+        let now = Date()
+
+        let startDate: Date
+        if let startStr = args["start_date"] as? String,
+           let parsed = SharedDateFormatters.databaseDate.date(from: startStr) {
+            startDate = parsed
+        } else {
+            startDate = calendar.startOfDay(for: now)
+        }
+
+        let endDate: Date
+        if let endStr = args["end_date"] as? String,
+           let parsed = SharedDateFormatters.databaseDate.date(from: endStr) {
+            endDate = calendar.date(byAdding: .day, value: 1, to: parsed) ?? parsed
+        } else if let days = args["days"] as? Int {
+            endDate = calendar.date(byAdding: .day, value: days, to: startDate)!
+        } else {
+            endDate = calendar.date(byAdding: .day, value: 1, to: startDate)!
+        }
+
+        let events = await EventKitManager.shared.getEvents(from: startDate, to: endDate)
+
+        let formatted = events.map { event -> [String: Any] in
+            var dict: [String: Any] = [
+                "title": event.title,
+                "start": SharedDateFormatters.fullDateTime.string(from: event.startDate),
+                "end": SharedDateFormatters.fullDateTime.string(from: event.endDate),
+                "all_day": event.isAllDay
+            ]
+            if let location = event.location { dict["location"] = location }
+            if let notes = event.notes { dict["notes"] = notes }
+            return dict
+        }
+
+        return contentResult(formatted)
+    }
+
+    private func handleGetReminders(_ args: [String: Any]) async throws -> [String: Any] {
+        let limit = args["limit"] as? Int ?? 20
+        let reminders = await EventKitManager.shared.getUpcomingReminders(limit: limit)
+
+        let formatted = reminders.map { reminder -> [String: Any] in
+            var dict: [String: Any] = [
+                "title": reminder.title,
+                "completed": reminder.isCompleted,
+                "priority": reminder.priority
+            ]
+            if let dueDate = reminder.dueDate { dict["due_date"] = dueDate }
+            if let notes = reminder.notes { dict["notes"] = notes }
+            return dict
+        }
+
+        return contentResult(formatted)
+    }
+
+    private func handleGetProjects(_ args: [String: Any]) throws -> [String: Any] {
+        let repo = ProjectRepository(db: AppDatabase.shared)
+        let summaries = try repo.projectSummaries()
+
+        let formatted = summaries.map { summary -> [String: Any] in
+            [
+                "id": summary.project.id ?? 0,
+                "name": summary.project.name,
+                "color": summary.project.color,
+                "open_todos": summary.openTodoCount,
+                "deliverables": summary.totalDeliverables,
+                "description": summary.project.description ?? ""
+            ]
+        }
+
+        return contentResult(formatted)
+    }
+
+    private func handleGetTodos(_ args: [String: Any]) throws -> [String: Any] {
+        let repo = ProjectRepository(db: AppDatabase.shared)
+        let projectId = args["project_id"] as? Int64
+        let includeCompleted = args["include_completed"] as? Bool ?? false
+
+        let todos: [Todo]
+        if let projectId {
+            todos = try repo.todosForProject(projectId)
+        } else {
+            todos = try repo.allOpenTodos()
+        }
+
+        let filtered = includeCompleted ? todos : todos.filter { !$0.completed }
+
+        let formatted = filtered.map { todo -> [String: Any] in
+            var dict: [String: Any] = [
+                "id": todo.id ?? 0,
+                "title": todo.title,
+                "priority": todo.priority,
+                "completed": todo.completed
+            ]
+            if let projectId = todo.projectId { dict["project_id"] = projectId }
+            if let dueDate = todo.dueDate {
+                dict["due_date"] = SharedDateFormatters.databaseDate.string(from: dueDate)
+            }
+            return dict
+        }
+
+        return contentResult(formatted)
+    }
+
+    // MARK: - WRITE Tools
+
+    private func handleCreateTodo(_ args: [String: Any]) throws -> [String: Any] {
+        guard let title = args["title"] as? String, !title.isEmpty else {
+            return errorResult("title is required")
+        }
+
+        let repo = ProjectRepository(db: AppDatabase.shared)
+        let priority = args["priority"] as? Int ?? 0
+        let projectId = args["project_id"] as? Int64
+
+        var dueDate: Date?
+        if let dueDateStr = args["due_date"] as? String {
+            dueDate = SharedDateFormatters.databaseDate.date(from: dueDateStr)
+        }
+
+        let todo = try repo.createTodo(title: title, priority: priority, dueDate: dueDate, projectId: projectId)
+
+        notifyProjectsChanged()
+
+        return contentResult([
+            "id": todo.id ?? 0,
+            "title": todo.title,
+            "status": "created"
+        ])
+    }
+
+    private func handleUpdateTodo(_ args: [String: Any]) throws -> [String: Any] {
+        guard let todoId = args["todo_id"] as? Int64 else {
+            return errorResult("todo_id is required")
+        }
+
+        let repo = ProjectRepository(db: AppDatabase.shared)
+        guard var todo = try repo.todo(id: todoId) else {
+            return errorResult("TODO not found with id \(todoId)")
+        }
+
+        if let title = args["title"] as? String { todo.title = title }
+        if let priority = args["priority"] as? Int { todo.priority = priority }
+        if let completed = args["completed"] as? Bool {
+            todo.completed = completed
+            if completed { todo.completedAt = Date() }
+        }
+        if let projectId = args["project_id"] as? Int64 { todo.projectId = projectId }
+
+        try repo.updateTodo(todo)
+
+        notifyProjectsChanged()
+
+        return contentResult([
+            "id": todo.id ?? 0,
+            "title": todo.title,
+            "completed": todo.completed,
+            "status": "updated"
+        ])
+    }
+
+    private func handleCreateProject(_ args: [String: Any]) throws -> [String: Any] {
+        guard let name = args["name"] as? String, !name.isEmpty else {
+            return errorResult("name is required")
+        }
+
+        let repo = ProjectRepository(db: AppDatabase.shared)
+        let color = args["color"] as? String ?? "#007AFF"
+        let description = args["description"] as? String
+
+        let project = try repo.createProject(name: name, color: color, description: description)
+
+        notifyProjectsChanged()
+
+        return contentResult([
+            "id": project.id ?? 0,
+            "name": project.name,
+            "status": "created"
+        ])
+    }
+
+    private func handleCreateCalendarBlock(_ args: [String: Any]) async throws -> [String: Any] {
+        guard let title = args["title"] as? String,
+              let startStr = args["start_time"] as? String,
+              let endStr = args["end_time"] as? String else {
+            return errorResult("title, start_time, and end_time are required")
+        }
+
+        let isoFormatter = ISO8601DateFormatter()
+        isoFormatter.formatOptions = [.withInternetDateTime]
+
+        guard let startDate = isoFormatter.date(from: startStr),
+              let endDate = isoFormatter.date(from: endStr) else {
+            return errorResult("Invalid date format. Use ISO 8601 (e.g. 2025-01-15T09:00:00-08:00)")
+        }
+
+        let notes = args["notes"] as? String
+
+        let eventId = try await EventKitManager.shared.createCalendarEvent(
+            title: title, startDate: startDate, endDate: endDate, notes: notes
+        )
+
+        return contentResult([
+            "event_id": eventId,
+            "title": title,
+            "status": "created"
+        ])
+    }
+
+    private func handleDispatchAgent(_ args: [String: Any]) async throws -> [String: Any] {
+        guard let todoId = args["todo_id"] as? Int64,
+              let prompt = args["prompt"] as? String, !prompt.isEmpty else {
+            return errorResult("todo_id and prompt are required")
+        }
+
+        let repo = ProjectRepository(db: AppDatabase.shared)
+        guard let todo = try repo.todo(id: todoId) else {
+            return errorResult("TODO not found with id \(todoId)")
+        }
+
+        // Dispatch agent asynchronously
+        let blinkRepo = BlinkRepository(db: AppDatabase.shared)
+        let run = try blinkRepo.createAgentRun(todoId: todoId, prompt: prompt)
+
+        Task.detached {
+            await AgentDispatcher.shared.execute(runId: run.id!, todoId: todoId, prompt: prompt)
+        }
+
+        return contentResult([
+            "agent_run_id": run.id ?? 0,
+            "todo": todo.title,
+            "status": "dispatched"
+        ])
+    }
+
+    // MARK: - Helpers
+
+    private func contentResult(_ value: Any) -> [String: Any] {
+        let jsonString: String
+        if let data = try? JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys]),
+           let str = String(data: data, encoding: .utf8) {
+            jsonString = str
+        } else {
+            jsonString = String(describing: value)
+        }
+
+        return [
+            "content": [
+                ["type": "text", "text": jsonString]
+            ]
+        ]
+    }
+
+    private func errorResult(_ message: String) -> [String: Any] {
+        [
+            "content": [
+                ["type": "text", "text": "Error: \(message)"]
+            ],
+            "isError": true
+        ]
+    }
+
+    private func notifyProjectsChanged() {
+        DispatchQueue.main.async {
+            AppState.shared.loadProjects()
+        }
+    }
+}

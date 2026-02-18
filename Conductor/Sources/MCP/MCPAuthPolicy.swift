@@ -1,8 +1,6 @@
 import Foundation
 import os
 
-/// Auth policy for local MCP HTTP endpoint.
-/// Uses a per-launch bearer token and short-lived validity window.
 final class MCPAuthPolicy {
     static let shared = MCPAuthPolicy()
 
@@ -35,7 +33,6 @@ final class MCPAuthPolicy {
             }
         }
 
-        // Backward compat: accept query-param auth but log a warning
         guard let comps = URLComponents(string: "http://localhost\(rawPath)"),
               let queryItems = comps.queryItems else {
             return false

@@ -15,7 +15,7 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
+    <string>2.0.0</string>
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
@@ -34,8 +34,8 @@
 	<string>Conductor can add reminders, but needs full access to read your existing reminders.</string>
 	<key>NSRemindersUsageDescription</key>
 	<string>Conductor needs access to your reminders to help you track tasks and create new reminders.</string>
-	    <key>NSAppleEventsUsageDescription</key>
-	    <string>Conductor needs Apple Events access to read from Mail and create draft email replies for your review.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Conductor needs Apple Events access to read from Mail and create draft email replies for your review.</string>
     <key>NSSpeechRecognitionUsageDescription</key>
     <string>Conductor uses speech recognition to convert your voice into text for hands-free input.</string>
     <key>NSMicrophoneUsageDescription</key>

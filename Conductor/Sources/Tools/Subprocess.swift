@@ -100,7 +100,6 @@ struct SystemSubprocessRunner: SubprocessRunning {
                 stdoutHandle.readabilityHandler = nil
                 stderrHandle.readabilityHandler = nil
 
-                // Drain any remaining buffered data after termination.
                 lock.lock()
                 stdoutData.append(stdoutHandle.readDataToEndOfFile())
                 stderrData.append(stderrHandle.readDataToEndOfFile())
@@ -118,4 +117,3 @@ struct SystemSubprocessRunner: SubprocessRunning {
         }
     }
 }
-

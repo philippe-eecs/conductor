@@ -13,7 +13,6 @@ enum ExecutableResolver {
         if let path = environment["PATH"], !path.isEmpty {
             searchPaths.append(contentsOf: path.split(separator: ":").map(String.init))
         } else {
-            // Common default paths for GUI-launched apps.
             searchPaths.append(contentsOf: [
                 "/opt/homebrew/bin",
                 "/usr/local/bin",
@@ -24,13 +23,11 @@ enum ExecutableResolver {
             ])
         }
 
-        // Add common user-local bins.
         searchPaths.append(contentsOf: [
             "\(home)/.local/bin",
             "\(home)/bin"
         ])
 
-        // De-duplicate while preserving order.
         var seen = Set<String>()
         searchPaths = searchPaths.filter { seen.insert($0).inserted }
 
@@ -44,4 +41,3 @@ enum ExecutableResolver {
         return nil
     }
 }
-
