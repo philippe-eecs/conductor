@@ -28,7 +28,7 @@ final class CostTracker: ObservableObject {
             weeklyCost = try Database.shared.getWeeklyCost()
             monthlyCost = try Database.shared.getMonthlyCost()
         } catch {
-            print("Failed to refresh cost data: \(error)")
+            Log.cost.error("Failed to refresh cost data: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -39,7 +39,7 @@ final class CostTracker: ObservableObject {
             refresh()
             checkBudgetAlerts()
         } catch {
-            print("Failed to log cost: \(error)")
+            Log.cost.error("Failed to log cost: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -48,7 +48,7 @@ final class CostTracker: ObservableObject {
         do {
             return try Database.shared.getCostHistory(days: days)
         } catch {
-            print("Failed to get cost history: \(error)")
+            Log.cost.error("Failed to get cost history: \(error.localizedDescription, privacy: .public)")
             return []
         }
     }
@@ -138,16 +138,20 @@ final class CostTracker: ObservableObject {
     }
 
     private func saveBudgetSettings() {
-        if let daily = dailyBudget {
-            try? Database.shared.setPreference(key: "daily_budget", value: String(daily))
-        } else {
-            try? Database.shared.deletePreference(key: "daily_budget")
-        }
+        do {
+            if let daily = dailyBudget {
+                try Database.shared.setPreference(key: "daily_budget", value: String(daily))
+            } else {
+                try Database.shared.deletePreference(key: "daily_budget")
+            }
 
-        if let monthly = monthlyBudget {
-            try? Database.shared.setPreference(key: "monthly_budget", value: String(monthly))
-        } else {
-            try? Database.shared.deletePreference(key: "monthly_budget")
+            if let monthly = monthlyBudget {
+                try Database.shared.setPreference(key: "monthly_budget", value: String(monthly))
+            } else {
+                try Database.shared.deletePreference(key: "monthly_budget")
+            }
+        } catch {
+            Log.cost.error("Failed to save budget settings: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -162,7 +166,7 @@ final class CostTracker: ObservableObject {
 
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
             if let error = error {
-                print("Failed to request notification permission: \(error)")
+                Log.cost.error("Failed to request notification permission: \(error.localizedDescription, privacy: .public)")
             }
         }
     }
@@ -180,7 +184,7 @@ final class CostTracker: ObservableObject {
 
     private func sendBudgetAlert(type: String, budget: Double, spent: Double) {
         guard RuntimeEnvironment.supportsUserNotifications else {
-            print("Budget alert (\(type)) skipped (notifications unavailable): budget=\(formatCost(budget)), spent=\(formatCost(spent))")
+            Log.cost.info("Budget alert (\(type, privacy: .public)) skipped (notifications unavailable): budget=\(self.formatCost(budget), privacy: .public), spent=\(self.formatCost(spent), privacy: .public)")
             return
         }
         // Use ISO 8601 date format for stable, locale-independent keys
@@ -207,12 +211,16 @@ final class CostTracker: ObservableObject {
 
         UNUserNotificationCenter.current().add(request) { error in
             if let error = error {
-                print("Failed to send notification: \(error)")
+                Log.cost.error("Failed to send notification: \(error.localizedDescription, privacy: .public)")
             }
         }
 
         // Mark as alerted
-        try? Database.shared.setPreference(key: alertKey, value: "1")
+        do {
+            try Database.shared.setPreference(key: alertKey, value: "1")
+        } catch {
+            Log.cost.error("Failed to mark alert key: \(error.localizedDescription, privacy: .public)")
+        }
 
         // Clean up old alert keys (keep only last 7 days)
         cleanupOldAlertKeys()
@@ -226,8 +234,12 @@ final class CostTracker: ObservableObject {
         for dayOffset in 8...30 {
             if let date = calendar.date(byAdding: .day, value: -dayOffset, to: Date()) {
                 let dateKey = SharedDateFormatters.iso8601.string(from: date)
-                try? Database.shared.deletePreference(key: "budget_alert_daily_\(dateKey)")
-                try? Database.shared.deletePreference(key: "budget_alert_monthly_\(dateKey)")
+                do {
+                    try Database.shared.deletePreference(key: "budget_alert_daily_\(dateKey)")
+                    try Database.shared.deletePreference(key: "budget_alert_monthly_\(dateKey)")
+                } catch {
+                    Log.cost.error("Failed to clean up alert key for \(dateKey, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                }
             }
         }
     }

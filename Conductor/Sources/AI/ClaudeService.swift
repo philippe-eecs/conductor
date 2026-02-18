@@ -314,7 +314,8 @@ actor ClaudeService {
         history: [ChatMessage],
         toolsEnabled: Bool = false,
         modelOverride: String? = nil,
-        permissionModeOverride: String? = nil
+        permissionModeOverride: String? = nil,
+        runtimePreamble: String? = nil
     ) async throws -> ClaudeResponse {
         // Build arguments for the claude CLI.
         // - Use --print for non-interactive mode.
@@ -355,8 +356,15 @@ actor ClaudeService {
             args += ["--append-system-prompt", buildSystemPrompt()]
         }
 
-        // Send only the user message via stdin (not system instructions)
-        let result = try await runClaudeCLI(args, stdin: (userMessage + "\n").data(using: .utf8))
+        let trimmedPreamble = runtimePreamble?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let stdinMessage: String
+        if let trimmedPreamble, !trimmedPreamble.isEmpty {
+            stdinMessage = "\(trimmedPreamble)\n\nUser request:\n\(userMessage)\n"
+        } else {
+            stdinMessage = userMessage + "\n"
+        }
+
+        let result = try await runClaudeCLI(args, stdin: stdinMessage.data(using: .utf8))
 
         guard result.exitCode == 0 else {
             let message = [result.stderr, result.stdout]
@@ -441,20 +449,8 @@ actor ClaudeService {
     private func buildAgentSystemPrompt() -> String {
         """
         You are Conductor Agent, executing a background task autonomously.
-        Current time: \(formattedDateTime(now())).
-        You have MCP tools to fetch the user's calendar, reminders, goals, notes, and emails.
-        Use them when your task requires real data.
-
+        \(sharedPromptSections())
         Be concise and actionable. Focus on completing your assigned task.
-
-        If you want to propose actions (create tasks, events, reminders, send emails, etc.), output them as:
-        <conductor_actions>
-        [
-          {"id": "unique-id", "type": "createTodoTask", "title": "Action description", "requiresUserApproval": true, "payload": {"title": "Task name", "due_date": "2025-01-15"}}
-        ]
-        </conductor_actions>
-
-        Available action types: createTodoTask, updateTodoTask, deleteTodoTask, createCalendarEvent, createReminder, createGoal, completeGoal, sendEmail
         """
     }
 
@@ -566,6 +562,21 @@ actor ClaudeService {
         - Use bullet points and clear formatting
         - Proactively suggest relevant actions
 
+        \(sharedPromptSections())
+
+        ## Scheduling
+        You can create time blocks in two ways:
+        1. Direct: Use conductor_create_theme_block to create a single block with a specific theme, start, and end time. Set publish=true to also add it to the calendar.
+        2. Bulk: Use conductor_plan_day to generate suggestions, then conductor_apply_plan_blocks (with publish=true) to apply and publish in one step.
+
+        Always describe proposed blocks to the user before creating them. Wait for confirmation unless the user has clearly asked you to schedule something specific.
+
+        If a tool returns an error saying a feature is disabled, tell the user they can enable it in Conductor Settings.
+        """
+    }
+
+    private func sharedPromptSections() -> String {
+        """
         Current date and time: \(formattedDateTime(now()))
 
         ## Your MCP Tools
@@ -578,21 +589,13 @@ actor ClaudeService {
 
         IMPORTANT: When the user asks about their schedule, calendar, events, meetings, tasks, reminders, goals, plans, notes, or emails — you MUST call the appropriate MCP tools to fetch real data. Do NOT guess, apologize, or say you cannot access their data. Your MCP tools from the conductor-context server are exactly how you access it.
 
-        ## Agent Tasks
-        You can create background agent tasks that run autonomously:
-        - conductor_create_agent_task: Create a task that fires at a time, on a schedule, or during check-ins
-        - conductor_list_agent_tasks: See what's queued
-        - conductor_cancel_agent_task: Cancel, pause, or resume tasks
-
-        When the user says "remind me", "follow up", "check on X later", or similar — create an agent task using conductor_create_agent_task.
-
         ## Proposing Actions
         If you want to create tasks, calendar events, reminders, or other actions, output them as:
         <conductor_actions>
         [{"id": "unique-id", "type": "createTodoTask", "title": "Description", "requiresUserApproval": true, "payload": {"title": "Task name"}}]
         </conductor_actions>
 
-        If a tool returns an error saying a feature is disabled, tell the user they can enable it in Conductor Settings.
+        Available action types: createTodoTask, updateTodoTask, deleteTodoTask, createCalendarEvent, createReminder, createGoal, completeGoal, sendEmail
         """
     }
 
@@ -606,7 +609,8 @@ actor ClaudeService {
             "mcpServers": [
                 "conductor-context": [
                     "type": "http",
-                    "url": url
+                    "url": url,
+                    "headers": ["Authorization": MCPAuthPolicy.shared.authorizationHeaderValue()]
                 ]
             ]
         ]
@@ -617,10 +621,10 @@ actor ClaudeService {
         do {
             let data = try JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted])
             try data.write(to: URL(fileURLWithPath: configPath), options: .atomic)
-            print("[MCP] Wrote config to \(configPath) (url=\(url))")
+            Log.mcp.info("Wrote config to \(configPath, privacy: .public)")
             return configPath
         } catch {
-            print("[MCP] Failed to write config: \(error)")
+            Log.mcp.error("Failed to write config: \(error.localizedDescription, privacy: .public)")
             return nil
         }
     }
@@ -637,11 +641,21 @@ actor ClaudeService {
         "mcp__conductor-context__conductor_get_goals",
         "mcp__conductor-context__conductor_get_notes",
         "mcp__conductor-context__conductor_get_emails",
+        "mcp__conductor-context__conductor_create_todo_task",
         "mcp__conductor-context__conductor_create_agent_task",
         "mcp__conductor-context__conductor_list_agent_tasks",
         "mcp__conductor-context__conductor_cancel_agent_task",
         "mcp__conductor-context__conductor_get_themes",
-        "mcp__conductor-context__conductor_create_theme"
+        "mcp__conductor-context__conductor_create_theme",
+        "mcp__conductor-context__conductor_delete_theme",
+        "mcp__conductor-context__conductor_get_day_review",
+        "mcp__conductor-context__conductor_get_operation_events",
+        "mcp__conductor-context__conductor_assign_task_theme",
+        "mcp__conductor-context__conductor_plan_day",
+        "mcp__conductor-context__conductor_plan_week",
+        "mcp__conductor-context__conductor_apply_plan_blocks",
+        "mcp__conductor-context__conductor_publish_plan_blocks",
+        "mcp__conductor-context__conductor_create_theme_block"
     ].joined(separator: ",")
 
     private static let disallowedToolsArgument = [

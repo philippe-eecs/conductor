@@ -156,7 +156,7 @@ final class EventScheduler {
         // Calculate and schedule next event
         recalculateNextEvent()
 
-        print("EventScheduler started (event-driven mode)")
+        Log.scheduler.info("EventScheduler started (event-driven mode)")
 
         // Log to activity on main thread
         Task { @MainActor in
@@ -168,7 +168,7 @@ final class EventScheduler {
         NotificationCenter.default.removeObserver(self)
         nextEventTimer?.cancel()
         nextEventTimer = nil
-        print("EventScheduler stopped")
+        Log.scheduler.info("EventScheduler stopped")
     }
 
     // MARK: - Event Subscriptions
@@ -188,7 +188,7 @@ final class EventScheduler {
     }
 
     @objc private func calendarDidChange(_ notification: Notification) {
-        print("Calendar/Reminders changed - recalculating schedule")
+        Log.scheduler.info("Calendar/Reminders changed — recalculating schedule")
         recalculateNextEvent()
     }
 
@@ -278,7 +278,7 @@ final class EventScheduler {
         upcomingEvents.sort { $0.date < $1.date }
 
         guard let next = upcomingEvents.first else {
-            print("No upcoming events scheduled")
+            Log.scheduler.info("No upcoming events scheduled")
             return
         }
 
@@ -331,7 +331,7 @@ final class EventScheduler {
 
         let delay = max(0, date.timeIntervalSince(Date()))
 
-        print("Scheduling \(event.description) for \(formatDate(date)) (in \(Int(delay))s)")
+        Log.scheduler.info("Scheduling \(event.description, privacy: .public) for \(self.formatDate(date), privacy: .public) (in \(Int(delay))s)")
 
         // Update public state
         switch event {

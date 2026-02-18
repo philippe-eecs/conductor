@@ -17,6 +17,7 @@ struct AgentTask: Identifiable {
     var nextRun: Date?
     var runCount: Int
     var maxRuns: Int?
+    var linkedTodoTaskId: String?
 
     enum TriggerType: String, Codable, CaseIterable {
         case time
@@ -53,7 +54,8 @@ struct AgentTask: Identifiable {
         lastRun: Date? = nil,
         nextRun: Date? = nil,
         runCount: Int = 0,
-        maxRuns: Int? = nil
+        maxRuns: Int? = nil,
+        linkedTodoTaskId: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -69,6 +71,7 @@ struct AgentTask: Identifiable {
         self.nextRun = nextRun
         self.runCount = runCount
         self.maxRuns = maxRuns
+        self.linkedTodoTaskId = linkedTodoTaskId
     }
 
     var isOneShot: Bool {

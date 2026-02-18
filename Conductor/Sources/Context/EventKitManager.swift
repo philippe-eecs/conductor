@@ -125,7 +125,7 @@ final class EventKitManager: @unchecked Sendable {
 
     func requestCalendarAccess() async -> Bool {
         guard RuntimeEnvironment.supportsTCCPrompts else {
-            print("Calendar access request skipped (not running inside a .app bundle).")
+            Log.eventKit.info("Calendar access request skipped (not running inside a .app bundle)")
             return false
         }
         // Use a dedicated store for requesting permission so we don't race with
@@ -139,14 +139,14 @@ final class EventKitManager: @unchecked Sendable {
                 }
                 return granted
             } catch {
-                print("Calendar access request failed: \(error)")
+                Log.eventKit.error("Calendar access request failed: \(error.localizedDescription, privacy: .public)")
                 return false
             }
         } else {
             let granted = await withCheckedContinuation { continuation in
                 store.requestAccess(to: .event) { granted, error in
                     if let error = error {
-                        print("Calendar access request failed: \(error)")
+                        Log.eventKit.error("Calendar access request failed: \(error.localizedDescription, privacy: .public)")
                     }
                     continuation.resume(returning: granted)
                 }
@@ -160,7 +160,7 @@ final class EventKitManager: @unchecked Sendable {
 
     func requestRemindersAccess() async -> Bool {
         guard RuntimeEnvironment.supportsTCCPrompts else {
-            print("Reminders access request skipped (not running inside a .app bundle).")
+            Log.eventKit.info("Reminders access request skipped (not running inside a .app bundle)")
             return false
         }
         // Use a dedicated store for requesting permission so we don't race with
@@ -174,14 +174,14 @@ final class EventKitManager: @unchecked Sendable {
                 }
                 return granted
             } catch {
-                print("Reminders access request failed: \(error)")
+                Log.eventKit.error("Reminders access request failed: \(error.localizedDescription, privacy: .public)")
                 return false
             }
         } else {
             let granted = await withCheckedContinuation { continuation in
                 store.requestAccess(to: .reminder) { granted, error in
                     if let error = error {
-                        print("Reminders access request failed: \(error)")
+                        Log.eventKit.error("Reminders access request failed: \(error.localizedDescription, privacy: .public)")
                     }
                     continuation.resume(returning: granted)
                 }
@@ -400,10 +400,10 @@ final class EventKitManager: @unchecked Sendable {
                 return []
             }
         } catch is EventKitError {
-            print("Reminders fetch timed out after 5 seconds")
+            Log.eventKit.warning("Reminders fetch timed out after 5 seconds")
             return []
         } catch {
-            print("Reminders fetch error: \(error)")
+            Log.eventKit.error("Reminders fetch error: \(error.localizedDescription, privacy: .public)")
             return []
         }
     }

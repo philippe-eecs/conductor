@@ -465,6 +465,7 @@ struct SettingsView: View {
                             } else if calendarStatus == .denied {
                                 showStatus("Calendar access denied. Enable in System Settings.")
                             }
+                            appState.refreshConnectionStates()
                         }
                     }
                 },
@@ -490,6 +491,7 @@ struct SettingsView: View {
                             } else if remindersStatus == .denied {
                                 showStatus("Reminders access denied. Enable in System Settings.")
                             }
+                            appState.refreshConnectionStates()
                         }
                     }
                 },
@@ -891,6 +893,7 @@ struct SettingsView: View {
                         .onChange(of: emailEnabled) { _, newValue in
                             savePlanningPreference(key: "email_integration_enabled", value: newValue ? "true" : "false")
                             logSecurityChange("Email integration", enabled: newValue)
+                            appState.refreshConnectionStates()
                         }
                 }
                 .padding(8)
@@ -982,6 +985,7 @@ struct SettingsView: View {
                     .onChange(of: readEnabled.wrappedValue) { _, newValue in
                         savePlanningPreference(key: readKey, value: newValue ? "true" : "false")
                         logSecurityChange("\(title) read access", enabled: newValue)
+                        appState.refreshConnectionStates()
                     }
                 Toggle("Write", isOn: writeEnabled)
                     .toggleStyle(.checkbox)
@@ -989,6 +993,7 @@ struct SettingsView: View {
                     .onChange(of: writeEnabled.wrappedValue) { _, newValue in
                         savePlanningPreference(key: writeKey, value: newValue ? "true" : "false")
                         logSecurityChange("\(title) write access", enabled: newValue)
+                        appState.refreshConnectionStates()
                     }
             }
         }

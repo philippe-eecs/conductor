@@ -51,7 +51,7 @@ final class MailService {
     /// Get recent unread emails from INBOX (last 24 hours)
     func getRecentEmails(hoursBack: Int = 24) async -> [EmailSummary] {
         guard isMailRunning() else {
-            print("MailService: Mail.app is not running")
+            Log.mail.info("Mail.app is not running")
             return []
         }
 
@@ -248,10 +248,10 @@ final class MailService {
                 var error: NSDictionary?
                 appleScript.executeAndReturnError(&error)
                 if let error {
-                    print("MailService sendEmail error: \(error)")
+                    Log.mail.error("sendEmail error: \(error)")
                     continuation.resume(returning: false)
                 } else {
-                    print("MailService: Email draft created for \(to)")
+                    Log.mail.info("Email draft created for \(to, privacy: .public)")
                     continuation.resume(returning: true)
                 }
             }
@@ -280,7 +280,7 @@ final class MailService {
                 let result = appleScript.executeAndReturnError(&error)
 
                 if let error = error {
-                    print("MailService AppleScript error: \(error)")
+                    Log.mail.error("AppleScript error: \(error)")
                     continuation.resume(returning: [])
                     return
                 }

@@ -190,7 +190,7 @@ final class SpeechManager: ObservableObject {
 
     private func startRecognition() async {
         guard let speechRecognizer = speechRecognizer, speechRecognizer.isAvailable else {
-            print("Speech recognizer not available")
+            Log.speech.error("Speech recognizer not available")
             return
         }
 
@@ -217,7 +217,7 @@ final class SpeechManager: ObservableObject {
             try audioEngine.start()
             isListening = true
         } catch {
-            print("Audio engine failed to start: \(error)")
+            Log.speech.error("Audio engine failed to start: \(error.localizedDescription, privacy: .public)")
             stopListening()
             return
         }

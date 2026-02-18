@@ -535,6 +535,7 @@ struct SetupView: View {
         if granted {
             try? Database.shared.setPreference(key: "calendar_read_enabled", value: "true")
         }
+        AppState.shared.refreshConnectionStates()
         return granted
     }
 
@@ -545,6 +546,7 @@ struct SetupView: View {
         if granted {
             try? Database.shared.setPreference(key: "reminders_read_enabled", value: "true")
         }
+        AppState.shared.refreshConnectionStates()
         return granted
     }
 

@@ -126,7 +126,7 @@ final class NotificationManager: NSObject {
                 AppState.shared.logActivity(.scheduler, "Notification sent: \(alert.title)")
             }
         } catch {
-            print("Failed to send notification: \(error)")
+            Log.notify.error("Failed to send notification: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -159,7 +159,7 @@ final class NotificationManager: NSObject {
         do {
             try await UNUserNotificationCenter.current().add(request)
         } catch {
-            print("Failed to schedule snoozed notification: \(error)")
+            Log.notify.error("Failed to schedule snoozed notification: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -198,7 +198,7 @@ final class NotificationManager: NSObject {
         do {
             try await UNUserNotificationCenter.current().add(request)
         } catch {
-            print("Failed to schedule meeting prep: \(error)")
+            Log.notify.error("Failed to schedule meeting prep: \(error.localizedDescription, privacy: .public)")
         }
     }
 }

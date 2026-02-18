@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import os
 
 /// In-process HTTP MCP server using Network.framework (NWListener).
 /// Binds to 127.0.0.1:0 (OS-assigned port) and handles MCP JSON-RPC over HTTP.
@@ -20,12 +21,21 @@ final class MCPServer: @unchecked Sendable {
     /// The full URL for the MCP endpoint.
     var endpointURL: String? {
         guard let port else { return nil }
-        return "http://127.0.0.1:\(port)/mcp"
+        return MCPAuthPolicy.shared.endpointURLString(port: port)
     }
+
+    private var retryCount = 0
+    private let maxRetries = 3
 
     private init() {}
 
     // MARK: - Lifecycle
+
+    /// Public entry point — resets retry count and starts the listener.
+    func startWithRetry() {
+        retryCount = 0
+        start()
+    }
 
     func start() {
         guard listener == nil else { return }
@@ -40,13 +50,17 @@ final class MCPServer: @unchecked Sendable {
                 case .ready:
                     if let port = listener.port?.rawValue {
                         self?.port = port
-                        print("[MCP] Server listening on 127.0.0.1:\(port)")
+                        self?.retryCount = 0
+                        Log.mcp.info("Server listening on 127.0.0.1:\(port, privacy: .public)")
                         // Eagerly write MCP config so it's ready before the first message
                         self?.writeMCPConfigEagerly(port: port)
                     }
                 case .failed(let error):
-                    print("[MCP] Server failed: \(error)")
+                    Log.mcp.error("Server failed: \(error.localizedDescription, privacy: .public)")
                     self?.port = nil
+                    self?.listener?.cancel()
+                    self?.listener = nil
+                    self?.handleRetry()
                 case .cancelled:
                     self?.port = nil
                 default:
@@ -61,7 +75,23 @@ final class MCPServer: @unchecked Sendable {
             listener.start(queue: queue)
             self.listener = listener
         } catch {
-            print("[MCP] Failed to create listener: \(error)")
+            Log.mcp.error("Failed to create listener: \(error.localizedDescription, privacy: .public)")
+            handleRetry()
+        }
+    }
+
+    private func handleRetry() {
+        if retryCount < maxRetries {
+            retryCount += 1
+            Log.mcp.warning("Retrying MCP server start (\(self.retryCount)/\(self.maxRetries))...")
+            queue.asyncAfter(deadline: .now() + 1) { [weak self] in
+                self?.start()
+            }
+        } else {
+            Log.mcp.fault("MCP server failed after \(self.maxRetries) retries")
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .mcpServerFailed, object: nil)
+            }
         }
     }
 
@@ -81,21 +111,22 @@ final class MCPServer: @unchecked Sendable {
 
     /// Write MCP config immediately using the known port (avoids race with self.port).
     private func writeMCPConfigEagerly(port: UInt16) {
-        let url = "http://127.0.0.1:\(port)/mcp"
+        let url = MCPAuthPolicy.shared.endpointURLString(port: port)
         let config: [String: Any] = [
             "mcpServers": [
                 "conductor-context": [
                     "type": "http",
-                    "url": url
+                    "url": url,
+                    "headers": ["Authorization": MCPAuthPolicy.shared.authorizationHeaderValue()]
                 ]
             ]
         ]
         do {
             let data = try JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted])
             try data.write(to: URL(fileURLWithPath: Self.configFilePath), options: .atomic)
-            print("[MCP] Wrote config to \(Self.configFilePath) (url=\(url))")
+            Log.mcp.info("Wrote config to \(Self.configFilePath, privacy: .public)")
         } catch {
-            print("[MCP] Failed to write config eagerly: \(error)")
+            Log.mcp.error("Failed to write config eagerly: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -106,8 +137,20 @@ final class MCPServer: @unchecked Sendable {
         receiveHTTPRequest(on: connection, accumulated: Data())
     }
 
+    private static let idleTimeoutSeconds: Int = 30
+
     private func receiveHTTPRequest(on connection: NWConnection, accumulated: Data) {
+        // Idle timeout: cancel the connection if no complete request arrives in time.
+        let timeout = DispatchWorkItem { [weak self] in
+            Log.mcp.warning("Connection idle timeout — cancelling")
+            self?.sendHTTPResponse(connection, status: 408, statusText: "Request Timeout",
+                                   body: Data(#"{"error":"Request timeout"}"#.utf8))
+        }
+        queue.asyncAfter(deadline: .now() + .seconds(Self.idleTimeoutSeconds), execute: timeout)
+
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] content, _, isComplete, error in
+            timeout.cancel()
+
             guard let self else {
                 connection.cancel()
                 return
@@ -118,8 +161,14 @@ final class MCPServer: @unchecked Sendable {
                 buffer.append(content)
             }
 
+            if buffer.count > MCPAuthPolicy.shared.maxRequestBodyBytes {
+                let body = Data(#"{"error":"Request too large"}"#.utf8)
+                self.sendHTTPResponse(connection, status: 413, statusText: "Payload Too Large", body: body)
+                return
+            }
+
             if let error {
-                print("[MCP] Receive error: \(error)")
+                Log.mcp.error("Receive error: \(error.localizedDescription, privacy: .public)")
                 connection.cancel()
                 return
             }
@@ -141,6 +190,7 @@ final class MCPServer: @unchecked Sendable {
 
     private struct HTTPRequest {
         let method: String
+        let rawPath: String
         let path: String
         let headers: [String: String]
         let body: Data
@@ -162,7 +212,8 @@ final class MCPServer: @unchecked Sendable {
         guard parts.count >= 2 else { return nil }
 
         let method = parts[0]
-        let path = parts[1]
+        let rawPath = parts[1]
+        let path = MCPAuthPolicy.shared.normalizedPath(from: rawPath)
 
         var headers: [String: String] = [:]
         for line in lines.dropFirst() {
@@ -184,7 +235,7 @@ final class MCPServer: @unchecked Sendable {
         }
 
         let body = data[bodyStart...]
-        return HTTPRequest(method: method, path: path, headers: headers, body: Data(body.prefix(contentLength)))
+        return HTTPRequest(method: method, rawPath: rawPath, path: path, headers: headers, body: Data(body.prefix(contentLength)))
     }
 
     // MARK: - HTTP Response
@@ -217,7 +268,7 @@ final class MCPServer: @unchecked Sendable {
     // MARK: - Request Processing
 
     private func processHTTPRequest(_ request: HTTPRequest, on connection: NWConnection) {
-        print("[MCP] \(request.method) \(request.path)")
+        Log.mcp.info("\(request.method, privacy: .public) \(request.path, privacy: .public)")
 
         guard request.method == "POST", request.path == "/mcp" else {
             let body = Data(#"{"error":"Not Found"}"#.utf8)
@@ -225,9 +276,15 @@ final class MCPServer: @unchecked Sendable {
             return
         }
 
+        guard MCPAuthPolicy.shared.isAuthorized(headers: request.headers, rawPath: request.rawPath) else {
+            let body = Data(#"{"error":"Unauthorized"}"#.utf8)
+            sendHTTPResponse(connection, status: 401, statusText: "Unauthorized", body: body)
+            return
+        }
+
         guard let json = try? JSONSerialization.jsonObject(with: request.body) as? [String: Any],
               let method = json["method"] as? String else {
-            print("[MCP] Failed to parse JSON-RPC body (\(request.body.count) bytes)")
+            Log.mcp.error("Failed to parse JSON-RPC body (\(request.body.count) bytes)")
             let errorResp: [String: Any] = [
                 "jsonrpc": "2.0",
                 "error": ["code": -32700, "message": "Parse error"],
@@ -239,7 +296,7 @@ final class MCPServer: @unchecked Sendable {
 
         let id = json["id"] ?? NSNull()
         let params = json["params"] as? [String: Any] ?? [:]
-        print("[MCP] method=\(method)")
+        Log.mcp.info("method=\(method, privacy: .public)")
 
         switch method {
         case "initialize":
@@ -277,6 +334,16 @@ final class MCPServer: @unchecked Sendable {
             let toolName = params["name"] as? String ?? ""
             let arguments = params["arguments"] as? [String: Any] ?? [:]
 
+            guard MCPToolHandlers.allowedToolNames.contains(toolName) else {
+                let errorResp: [String: Any] = [
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "error": ["code": -32602, "message": "Tool not allowed: \(toolName)"]
+                ]
+                sendJSON(connection, errorResp)
+                return
+            }
+
             // Post notification for activity logging
             let argsDescription = (try? JSONSerialization.data(withJSONObject: arguments, options: []))
                 .flatMap { String(data: $0, encoding: .utf8) } ?? ""
@@ -288,15 +355,18 @@ final class MCPServer: @unchecked Sendable {
                 )
             }
 
-            // Handle tool calls asynchronously since they may need to access EventKit/DB
+            // Handle tool calls asynchronously since they may need to access EventKit/DB.
+            // Dispatch response back to the serial queue to avoid races with connection state.
             Task {
                 let toolResult = await self.toolHandlers.handleToolCall(name: toolName, arguments: arguments)
-                let response: [String: Any] = [
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "result": toolResult
-                ]
-                self.sendJSON(connection, response)
+                self.queue.async {
+                    let response: [String: Any] = [
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": toolResult
+                    ]
+                    self.sendJSON(connection, response)
+                }
             }
 
         default:

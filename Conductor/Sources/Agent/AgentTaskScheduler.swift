@@ -24,7 +24,7 @@ final class AgentTaskScheduler {
         }
         pollTimer?.resume()
 
-        print("[AgentTaskScheduler] Started (polling every 60s)")
+        Log.agent.info("AgentTaskScheduler started (polling every 60s)")
         Task { @MainActor in
             AppState.shared.logActivity(.scheduler, "Agent task scheduler started")
         }
@@ -34,19 +34,17 @@ final class AgentTaskScheduler {
         pollTimer?.cancel()
         pollTimer = nil
         isRunning = false
-        print("[AgentTaskScheduler] Stopped")
+        Log.agent.info("AgentTaskScheduler stopped")
     }
 
     // MARK: - Polling
 
     private func pollForDueTasks() {
-        let store = AgentTaskStore(database: database)
-
-        guard let dueTasks = try? store.getDueTasks(), !dueTasks.isEmpty else {
+        guard let dueTasks = try? database.getDueAgentTasks(), !dueTasks.isEmpty else {
             return
         }
 
-        print("[AgentTaskScheduler] Found \(dueTasks.count) due task(s)")
+        Log.agent.info("Found \(dueTasks.count) due task(s)")
 
         Task {
             await AgentExecutor.shared.enqueueBatch(dueTasks)
@@ -58,13 +56,11 @@ final class AgentTaskScheduler {
     /// Called by EventScheduler during check-in triggers.
     /// Runs all active agent tasks that match the given check-in phase.
     func runCheckinTasks(phase: String) {
-        let store = AgentTaskStore(database: database)
-
-        guard let tasks = try? store.getCheckinTasks(phase: phase), !tasks.isEmpty else {
+        guard let tasks = try? database.getCheckinAgentTasks(phase: phase), !tasks.isEmpty else {
             return
         }
 
-        print("[AgentTaskScheduler] Running \(tasks.count) check-in task(s) for phase: \(phase)")
+        Log.agent.info("Running \(tasks.count) check-in task(s) for phase: \(phase, privacy: .public)")
 
         Task {
             await AgentExecutor.shared.enqueueBatch(tasks)
@@ -75,10 +71,8 @@ final class AgentTaskScheduler {
 
     /// Manually trigger a specific agent task by ID.
     func triggerTask(id taskId: String) {
-        let store = AgentTaskStore(database: database)
-
-        guard let task = try? store.getAgentTask(id: taskId), task.status == .active else {
-            print("[AgentTaskScheduler] Task not found or not active: \(taskId)")
+        guard let task = try? database.getAgentTask(id: taskId), task.status == .active else {
+            Log.agent.warning("Task not found or not active: \(taskId, privacy: .public)")
             return
         }
 

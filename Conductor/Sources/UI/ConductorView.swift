@@ -19,12 +19,15 @@ enum ConductorTab: String, CaseIterable {
 
 struct ConductorView: View {
     @EnvironmentObject var appState: AppState
+    @Environment(\.scenePhase) private var scenePhase
     @ObservedObject private var speechManager = SpeechManager.shared
     @State private var inputText: String = ""
     @State private var showSettings: Bool = false
     @State private var showSessions: Bool = false
     @State private var showPlanning: Bool = false
     @State private var showBriefing: Bool = false
+    @State private var showDayReview: Bool = false
+    @State private var showConnectionSetupPrompt: Bool = false
     @State private var selectedTab: ConductorTab = .chat
     @FocusState private var isInputFocused: Bool
 
@@ -82,8 +85,32 @@ struct ConductorView: View {
         .sheet(isPresented: $showBriefing) {
             MorningBriefingView()
         }
+        .sheet(isPresented: $showDayReview) {
+            DayReviewView()
+        }
+        .sheet(isPresented: $showConnectionSetupPrompt) {
+            ConnectionSetupPromptView(onOpenSettings: {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                    showSettings = true
+                }
+            })
+            .environmentObject(appState)
+        }
         .onAppear {
             isInputFocused = true
+            appState.refreshConnectionStates()
+            appState.refreshOperationEvents(limit: 30)
+            evaluateConnectionPrompt()
+            if DayReviewService.shared.shouldAutoShowOnLaunch() {
+                showDayReview = true
+            }
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .active {
+                appState.refreshConnectionStates()
+                appState.refreshOperationEvents(limit: 30)
+                evaluateConnectionPrompt()
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .prepareEmailResponse)) { notification in
             if let text = notification.userInfo?["text"] as? String {
@@ -94,6 +121,20 @@ struct ConductorView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .showPlanningView)) { _ in
             showPlanning = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .showDayReview)) { _ in
+            showDayReview = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .showThemeInTasks)) { notification in
+            selectedTab = .focus
+            // TodoListView picks up the themeId via its own notification observer
+        }
+    }
+
+    private func evaluateConnectionPrompt() {
+        guard appState.shouldShowConnectionPrompt() else { return }
+        if !showConnectionSetupPrompt {
+            showConnectionSetupPrompt = true
         }
     }
 
@@ -170,6 +211,9 @@ struct ConductorView: View {
 
             Spacer()
 
+            connectionStatusView
+            operationStatusView
+
             // Stop speech button (shown when speaking)
             if speechManager.isSpeaking {
                 Button(action: { speechManager.stop() }) {
@@ -192,15 +236,15 @@ struct ConductorView: View {
             .buttonStyle(.plain)
             .help(speechManager.isEnabled ? "Disable voice" : "Enable voice")
 
-            // Morning briefing
-            Button(action: { showBriefing = true }) {
+            // Day review
+            Button(action: { showDayReview = true }) {
                 Image(systemName: "sun.max")
                     .foregroundColor(.orange)
                     .frame(minWidth: 28, minHeight: 28)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("Morning Briefing")
+            .help("Day Review")
 
             // Settings
             Button(action: { showSettings = true }) {
@@ -219,6 +263,10 @@ struct ConductorView: View {
 
                 Button(action: { showPlanning = true }) {
                     Label("Daily Planning", systemImage: "calendar.badge.clock")
+                }
+
+                Button(action: { showDayReview = true }) {
+                    Label("Day Review", systemImage: "sun.max")
                 }
 
                 Button(action: { showSessions = true }) {
@@ -250,6 +298,111 @@ struct ConductorView: View {
         .padding(.vertical, 8)
     }
 
+    private var connectionStatusView: some View {
+        HStack(spacing: 6) {
+            connectionDot(
+                icon: "calendar",
+                color: calendarConnectionColor,
+                label: calendarConnectionLabel
+            )
+            connectionDot(
+                icon: "checklist",
+                color: remindersConnectionColor,
+                label: remindersConnectionLabel
+            )
+            connectionDot(
+                icon: "envelope",
+                color: emailConnectionColor,
+                label: appState.emailIntegrationEnabled
+                    ? (appState.mailAppRunning ? "Email connected" : "Email enabled (open Mail.app)")
+                    : "Email disabled"
+            )
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color.accentColor.opacity(0.08))
+        .clipShape(Capsule())
+        .help("Connected apps")
+        .onTapGesture {
+            showSettings = true
+        }
+    }
+
+    @ViewBuilder
+    private var operationStatusView: some View {
+        if let event = appState.latestOperationEvent {
+            HStack(spacing: 6) {
+                Image(systemName: event.statusIcon)
+                    .font(.caption)
+                    .foregroundColor(operationStatusColor(for: event))
+                Text(event.operation.rawValue.capitalized)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                Text(event.entityType.replacingOccurrences(of: "_", with: " "))
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color(NSColor.controlBackgroundColor))
+            .clipShape(Capsule())
+            .help("\(event.message)\n\(event.formattedTime)")
+        }
+    }
+
+    private var calendarConnectionColor: Color {
+        if appState.calendarWriteOnlyAccess { return .orange }
+        if !appState.calendarAccessGranted { return .red }
+        return appState.calendarReadEnabled ? .green : .orange
+    }
+
+    private var remindersConnectionColor: Color {
+        if appState.remindersWriteOnlyAccess { return .orange }
+        if !appState.remindersAccessGranted { return .red }
+        return appState.remindersReadEnabled ? .green : .orange
+    }
+
+    private var emailConnectionColor: Color {
+        if !appState.emailIntegrationEnabled { return .secondary }
+        return appState.mailAppRunning ? .green : .orange
+    }
+
+    private func operationStatusColor(for event: OperationEvent) -> Color {
+        switch event.status {
+        case .success: return .green
+        case .failed: return .red
+        case .partialSuccess: return .orange
+        }
+    }
+
+    private var calendarConnectionLabel: String {
+        if appState.calendarWriteOnlyAccess {
+            return "Calendar is write-only. Grant Full Access in System Settings > Privacy & Security > Calendars."
+        }
+        if !appState.calendarAccessGranted {
+            return "Calendar permission missing"
+        }
+        return appState.calendarReadEnabled ? "Calendar connected" : "Calendar disabled in Settings"
+    }
+
+    private var remindersConnectionLabel: String {
+        if appState.remindersWriteOnlyAccess {
+            return "Reminders is write-only. Grant Full Access in System Settings > Privacy & Security > Reminders."
+        }
+        if !appState.remindersAccessGranted {
+            return "Reminders permission missing"
+        }
+        return appState.remindersReadEnabled ? "Reminders connected" : "Reminders disabled in Settings"
+    }
+
+    private func connectionDot(icon: String, color: Color, label: String) -> some View {
+        Image(systemName: icon)
+            .font(.caption)
+            .foregroundColor(color)
+            .help(label)
+    }
+
     // MARK: - Messages
 
     private var messagesView: some View {
@@ -260,7 +413,12 @@ struct ConductorView: View {
                         welcomeView
                     } else {
                         ForEach(appState.messages) { message in
-                            MessageBubbleView(message: message)
+                            MessageBubbleView(
+                                message: message,
+                                onChatAction: { action in
+                                    handleChatAction(messageId: message.id, action: action)
+                                }
+                            )
                                 .id(message.id)
                         }
 
@@ -491,6 +649,16 @@ struct ConductorView: View {
             inputText = preset.template + inputText
         }
         isInputFocused = true
+    }
+
+    private func handleChatAction(messageId: UUID, action: ChatButtonAction) {
+        if case .openDayReview = action {
+            showDayReview = true
+            return
+        }
+        Task {
+            await appState.handleChatButtonAction(messageId: messageId, action: action)
+        }
     }
 }
 

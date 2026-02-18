@@ -376,17 +376,17 @@ final class ContextBuilder {
             }
         }
 
-        // Fetch focus blocks
-        let focusBlocks = (try? database.getFocusBlocksForDay(date)) ?? []
-        for block in focusBlocks {
-            if let group = try? database.getFocusGroup(id: block.groupId) {
+        // Fetch theme blocks
+        let themeBlocks = (try? database.getThemeBlocksForDay(date)) ?? []
+        for block in themeBlocks {
+            if let theme = try? database.getTheme(id: block.themeId) {
                 timeBlocks.append(DayOverviewData.TimeBlockData(
                     id: block.id,
-                    title: group.name,
+                    title: theme.name,
                     startTime: block.startTime,
                     endTime: block.endTime,
-                    colorName: group.color,
-                    type: "focusBlock"
+                    colorName: theme.color,
+                    type: "themeBlock"
                 ))
             }
         }

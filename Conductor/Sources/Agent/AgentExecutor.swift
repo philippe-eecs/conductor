@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Executes agent tasks using a dedicated ClaudeService instance (separate from chat).
 /// Runs tasks serially (max 1 concurrent CLI call) to control cost and resource usage.
@@ -119,12 +120,11 @@ actor AgentExecutor {
                 durationMs: durationMs
             )
 
-            let store = AgentTaskStore(database: database)
-            try store.saveResult(result)
+            try database.saveAgentTaskResult(result)
 
             // 7. Update task state
             let now = Date()
-            var newRunCount = task.runCount + 1
+            let newRunCount = task.runCount + 1
             let nextRunDate = calculateNextRun(for: task, after: now)
             var newStatus = task.status
 
@@ -133,17 +133,20 @@ actor AgentExecutor {
                 newStatus = .completed
             }
 
-            try store.updateTaskAfterRun(
-                id: task.id,
-                lastRun: now,
-                nextRun: nextRunDate,
-                runCount: newRunCount,
-                status: newStatus
-            )
+            var updated = task
+            updated.lastRun = now
+            updated.nextRun = nextRunDate
+            updated.runCount = newRunCount
+            updated.status = newStatus
+            try database.updateAgentTask(updated)
 
             // 8. Log cost
             if let cost = response.totalCostUsd {
-                try? database.logCost(amount: cost, sessionId: nil)
+                do {
+                    try database.logCost(amount: cost, sessionId: nil)
+                } catch {
+                    Log.agent.error("Failed to log agent cost: \(error.localizedDescription, privacy: .public)")
+                }
             }
 
             // 9. Update UI
@@ -170,7 +173,11 @@ actor AgentExecutor {
                 status: .failed,
                 durationMs: durationMs
             )
-            try? AgentTaskStore(database: database).saveResult(result)
+            do {
+                try database.saveAgentTaskResult(result)
+            } catch {
+                Log.agent.error("Failed to save error result for task \(task.id, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
 
             await MainActor.run {
                 AppState.shared.logActivity(.error, "Agent failed: \(task.name) - \(error.localizedDescription)")

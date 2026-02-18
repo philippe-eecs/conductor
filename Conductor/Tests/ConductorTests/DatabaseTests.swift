@@ -1,10 +1,9 @@
 import XCTest
-import SQLite
 @testable import Conductor
 
 final class DatabaseTests: XCTestCase {
     func test_loadRecentMessages_returnsMostRecentN_inChronologicalOrder() throws {
-        let db = Database(connection: try Connection(.inMemory))
+        let db = try Database(inMemory: true)
 
         let t1 = Date(timeIntervalSince1970: 1)
         let t2 = Date(timeIntervalSince1970: 2)
@@ -25,7 +24,7 @@ final class DatabaseTests: XCTestCase {
     }
 
     func test_associateOrphanedMessages_movesRecentNullSessionMessagesIntoSession() throws {
-        let db = Database(connection: try Connection(.inMemory))
+        let db = try Database(inMemory: true)
         let message = ChatMessage(role: .user, content: "orphan")
         try db.saveMessage(message, forSession: nil)
 
@@ -35,7 +34,7 @@ final class DatabaseTests: XCTestCase {
     }
 
     func test_preferences_setGetDelete() throws {
-        let db = Database(connection: try Connection(.inMemory))
+        let db = try Database(inMemory: true)
 
         try db.setPreference(key: "k", value: "v")
         XCTAssertEqual(try db.getPreference(key: "k"), "v")
@@ -45,7 +44,7 @@ final class DatabaseTests: XCTestCase {
     }
 
     func test_saveSession_upsertsTitleAndLastUsed() throws {
-        let db = Database(connection: try Connection(.inMemory))
+        let db = try Database(inMemory: true)
 
         try db.saveSession(id: "s1", title: "First")
         try db.saveSession(id: "s1", title: "Updated")
@@ -59,7 +58,7 @@ final class DatabaseTests: XCTestCase {
     // MARK: - Daily Planning Tests
 
     func test_dailyGoals_CRUD() throws {
-        let db = Database(connection: try Connection(.inMemory))
+        let db = try Database(inMemory: true)
         let today = "2024-01-15"
 
         // Create
@@ -90,7 +89,7 @@ final class DatabaseTests: XCTestCase {
     }
 
     func test_dailyGoals_rollover() throws {
-        let db = Database(connection: try Connection(.inMemory))
+        let db = try Database(inMemory: true)
         let today = "2024-01-15"
         let tomorrow = "2024-01-16"
 
@@ -106,7 +105,7 @@ final class DatabaseTests: XCTestCase {
     }
 
     func test_dailyGoals_incompleteQuery() throws {
-        let db = Database(connection: try Connection(.inMemory))
+        let db = try Database(inMemory: true)
 
         // Create goals for multiple days
         let goal1 = DailyGoal(date: "2024-01-13", goalText: "Old incomplete", priority: 1)
@@ -127,7 +126,7 @@ final class DatabaseTests: XCTestCase {
     }
 
     func test_dailyBriefs_saveAndRetrieve() throws {
-        let db = Database(connection: try Connection(.inMemory))
+        let db = try Database(inMemory: true)
         let today = "2024-01-15"
 
         let brief = DailyBrief(
@@ -145,7 +144,7 @@ final class DatabaseTests: XCTestCase {
     }
 
     func test_dailyBriefs_markAsRead() throws {
-        let db = Database(connection: try Connection(.inMemory))
+        let db = try Database(inMemory: true)
         let today = "2024-01-15"
 
         let brief = DailyBrief(date: today, briefType: .morning, content: "Test")
@@ -158,7 +157,7 @@ final class DatabaseTests: XCTestCase {
     }
 
     func test_dailyBriefs_dismiss() throws {
-        let db = Database(connection: try Connection(.inMemory))
+        let db = try Database(inMemory: true)
         let today = "2024-01-15"
 
         let brief = DailyBrief(date: today, briefType: .morning, content: "Test")
@@ -171,7 +170,7 @@ final class DatabaseTests: XCTestCase {
     }
 
     func test_goalCompletionRate() throws {
-        let db = Database(connection: try Connection(.inMemory))
+        let db = try Database(inMemory: true)
 
         // Use today's date to ensure goals fall within the query range
         let today = DailyPlanningService.todayDateString
@@ -199,7 +198,7 @@ final class DatabaseTests: XCTestCase {
     // MARK: - Productivity Stats Tests
 
     func test_productivityStats_saveAndRetrieve() throws {
-        let db = Database(connection: try Connection(.inMemory))
+        let db = try Database(inMemory: true)
         let today = "2024-01-15"
 
         let stats = ProductivityStats(
@@ -225,7 +224,7 @@ final class DatabaseTests: XCTestCase {
     }
 
     func test_productivityStats_rangeQuery() throws {
-        let db = Database(connection: try Connection(.inMemory))
+        let db = try Database(inMemory: true)
 
         // Create stats for multiple days
         let stats1 = ProductivityStats(date: "2024-01-13", goalsCompleted: 2, goalsTotal: 3, meetingsCount: 2, meetingsHours: 1.5, focusHours: 5.0, overdueCount: 0)
@@ -243,10 +242,61 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(range[1].date, "2024-01-14")
     }
 
+    func test_operationEvents_saveAndQuery() throws {
+        let db = try Database(inMemory: true)
+        let correlation = UUID().uuidString
+
+        let created = OperationEvent(
+            correlationId: correlation,
+            operation: .created,
+            entityType: "todo_task",
+            entityId: "task-1",
+            source: "test",
+            status: .success,
+            message: "Created todo",
+            payload: ["theme_name": "Work"]
+        )
+        let failed = OperationEvent(
+            correlationId: correlation,
+            operation: .failed,
+            entityType: "agent_task",
+            entityId: "agent-1",
+            source: "test",
+            status: .failed,
+            message: "Failed agent create"
+        )
+
+        try db.saveOperationEvent(created)
+        try db.saveOperationEvent(failed)
+
+        let all = try db.getRecentOperationEvents(limit: 10)
+        XCTAssertEqual(all.count, 2)
+        XCTAssertEqual(all.first?.id, failed.id)
+
+        let failedOnly = try db.getOperationEvents(limit: 10, status: .failed, correlationId: correlation)
+        XCTAssertEqual(failedOnly.count, 1)
+        XCTAssertEqual(failedOnly[0].entityId, "agent-1")
+    }
+
+    func test_agentTask_persistsLinkedTodoTaskId() throws {
+        let db = try Database(inMemory: true)
+
+        let task = AgentTask(
+            name: "Follow up",
+            prompt: "Ping me later",
+            triggerType: .manual,
+            linkedTodoTaskId: "todo-123"
+        )
+        try db.createAgentTask(task)
+
+        let fetched = try db.getAgentTask(id: task.id)
+        XCTAssertEqual(fetched?.linkedTodoTaskId, "todo-123")
+    }
+
     // MARK: - Tasks Tests
 
     func test_tasksAndLists_CRUD_andQueries() throws {
-        let db = Database(connection: try Connection(.inMemory))
+        let db = try Database(inMemory: true)
 
         let listPersonal = try db.createTaskList(name: "Personal", color: "red", icon: "heart")
         let listWork = try db.createTaskList(name: "Work")
@@ -301,7 +351,7 @@ final class DatabaseTests: XCTestCase {
     }
 
     func test_getTasksForDay_includesOverdueByDefault() throws {
-        let db = Database(connection: try Connection(.inMemory))
+        let db = try Database(inMemory: true)
 
         let calendar = Calendar.current
         let startOfDay = calendar.startOfDay(for: Date())
@@ -325,7 +375,7 @@ final class DatabaseTests: XCTestCase {
     }
 
     func test_toggleTaskCompleted_setsAndClearsCompletedAt() throws {
-        let db = Database(connection: try Connection(.inMemory))
+        let db = try Database(inMemory: true)
         let t1 = TodoTask(title: "Toggle me")
         try db.createTask(t1)
 

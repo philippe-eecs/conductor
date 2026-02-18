@@ -1,5 +1,4 @@
 import XCTest
-import SQLite
 @testable import Conductor
 
 final class ContextBuilderTests: XCTestCase {
@@ -56,7 +55,7 @@ final class ContextBuilderTests: XCTestCase {
     }
 
     func test_buildContext_respectsCalendarAndRemindersPreferenceToggles() async throws {
-        let db = Database(connection: try Connection(.inMemory))
+        let db = try Database(inMemory: true)
 
         // Disable both sources.
         try db.setPreference(key: "calendar_read_enabled", value: "false")
@@ -96,7 +95,7 @@ final class ContextBuilderTests: XCTestCase {
     }
 
     func test_buildContext_includesCalendarAndRemindersWhenEnabled() async throws {
-        let db = Database(connection: try Connection(.inMemory))
+        let db = try Database(inMemory: true)
 
         try db.setPreference(key: "calendar_read_enabled", value: "true")
         try db.setPreference(key: "reminders_read_enabled", value: "true")
@@ -144,7 +143,7 @@ final class ContextBuilderTests: XCTestCase {
     }
 
     func test_buildContext_doesNotCallEventKitWhenNotAuthorized() async throws {
-        let db = Database(connection: try Connection(.inMemory))
+        let db = try Database(inMemory: true)
 
         try db.setPreference(key: "calendar_read_enabled", value: "true")
         try db.setPreference(key: "reminders_read_enabled", value: "true")
@@ -169,7 +168,7 @@ final class ContextBuilderTests: XCTestCase {
     }
 
     func test_buildContext_buildsPlanningContextEvenWhenCalendarDenied() async throws {
-        let db = Database(connection: try Connection(.inMemory))
+        let db = try Database(inMemory: true)
 
         try db.setPreference(key: "planning_enabled", value: "true")
         try db.setPreference(key: "calendar_read_enabled", value: "true")

@@ -351,6 +351,16 @@ final class ClaudeServiceTests: XCTestCase {
         }
         XCTAssertEqual(args[toolsIdx + 1], "default")
 
+        guard let allowedIdx = args.firstIndex(of: "--allowedTools"), allowedIdx + 1 < args.count else {
+            return XCTFail("Expected --allowedTools argument with MCP allowlist")
+        }
+        let allowed = args[allowedIdx + 1]
+        XCTAssertTrue(allowed.contains("conductor_get_day_review"))
+        XCTAssertTrue(allowed.contains("conductor_plan_day"))
+        XCTAssertTrue(allowed.contains("conductor_plan_week"))
+        XCTAssertTrue(allowed.contains("conductor_apply_plan_blocks"))
+        XCTAssertTrue(allowed.contains("conductor_publish_plan_blocks"))
+
         // 4. stdin must contain ONLY the user message (not system prompt)
         let stdin = String(data: invocation.stdin ?? Data(), encoding: .utf8) ?? ""
         XCTAssertEqual(stdin, "What's on my calendar?\n")

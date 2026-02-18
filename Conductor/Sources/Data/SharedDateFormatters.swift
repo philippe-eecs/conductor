@@ -98,6 +98,12 @@ enum SharedDateFormatters {
         cachedDateFormatter(key: "fullDateTime") { $0.dateFormat = "EEEE, MMMM d, yyyy 'at' h:mm a" }
     }
 
+    static var iso8601DateTime: DateFormatter {
+        cachedDateFormatter(key: "iso8601DateTime") {
+            $0.dateFormat = "yyyy-MM-dd'T'HH:mm:ssZZZZZ"
+        }
+    }
+
     static var time24HourWithSeconds: DateFormatter {
         cachedDateFormatter(key: "time24HourWithSeconds") { $0.dateFormat = "HH:mm:ss" }
     }
@@ -106,4 +112,3 @@ enum SharedDateFormatters {
         cachedISO8601Formatter(key: "iso8601") { $0.formatOptions = [.withFullDate] }
     }
 }
-

@@ -30,14 +30,14 @@ final class ProactiveEngine {
         // Start event-driven scheduler (handles meeting warnings, daily/weekly/monthly jobs)
         eventScheduler.start()
 
-        print("ProactiveEngine started (event-driven mode)")
+        Log.proactive.info("ProactiveEngine started (event-driven mode)")
     }
 
     func stop() {
         eventScheduler.stop()
         isRunning = false
 
-        print("ProactiveEngine stopped")
+        Log.proactive.info("ProactiveEngine stopped")
     }
 
     // MARK: - Notification Permission
@@ -47,9 +47,9 @@ final class ProactiveEngine {
             options: [.alert, .sound, .badge]
         ) { granted, error in
             if let error = error {
-                print("Notification permission error: \(error)")
+                Log.proactive.error("Notification permission error: \(error.localizedDescription, privacy: .public)")
             }
-            print("Notification permission granted: \(granted)")
+            Log.proactive.info("Notification permission granted: \(granted)")
         }
     }
 
@@ -110,7 +110,7 @@ final class ProactiveEngine {
         do {
             try await UNUserNotificationCenter.current().add(request)
         } catch {
-            print("Failed to send notification: \(error)")
+            Log.proactive.error("Failed to send notification: \(error.localizedDescription, privacy: .public)")
         }
     }
 }

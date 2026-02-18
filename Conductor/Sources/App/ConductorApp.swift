@@ -17,6 +17,9 @@ struct ConductorApp: App {
 extension Notification.Name {
     static let showPlanningView = Notification.Name("showPlanningView")
     static let mcpToolCalled = Notification.Name("mcpToolCalled")
+    static let showDayReview = Notification.Name("showDayReview")
+    static let mcpServerFailed = Notification.Name("mcpServerFailed")
+    static let showThemeInTasks = Notification.Name("showThemeInTasks")
 }
 
 @MainActor
@@ -39,6 +42,13 @@ class AppState: ObservableObject {
     @Published var hasCompletedSetup: Bool = false
     @Published var calendarAccessGranted: Bool = false
     @Published var remindersAccessGranted: Bool = false
+    @Published var calendarWriteOnlyAccess: Bool = false
+    @Published var remindersWriteOnlyAccess: Bool = false
+    @Published var calendarReadEnabled: Bool = true
+    @Published var remindersReadEnabled: Bool = true
+    @Published var emailIntegrationEnabled: Bool = false
+    @Published var mailAppRunning: Bool = false
+    @Published var chatCardsV1Enabled: Bool = true
 
     // Tool mode: when enabled, Claude can execute commands (with approval prompts)
     @Published var toolsEnabled: Bool = false
@@ -49,12 +59,19 @@ class AppState: ObservableObject {
 
     // Activity log for transparency
     @Published var recentActivity: [ActivityLogEntry] = []
+    @Published var recentOperationEvents: [OperationEvent] = []
 
     // Agent task approval
     @Published var pendingApprovalCount: Int = 0
     @Published var pendingActions: [AssistantActionRequest] = []
 
-    private let claudeService = ClaudeService.shared
+    // Block proposal popover
+    @Published var showProposalPopoverDraftId: String?
+
+    let connectionPromptDismissedDateKey = "connection_prompt_last_dismissed_date"
+
+    let claudeService = ClaudeService.shared
+    let conversationCore = ConversationCore.shared
     private let planningService = DailyPlanningService.shared
 
     init() {
@@ -67,14 +84,31 @@ class AppState: ObservableObject {
         // Load planning preference (default: enabled)
         planningEnabled = (try? Database.shared.getPreference(key: "planning_enabled")) != "false"
 
+        // Feature flag: enabled by default in dev
+        if let cardsPref = try? Database.shared.getPreference(key: "chat_cards_v1_enabled") {
+            chatCardsV1Enabled = cardsPref != "false"
+        } else {
+            chatCardsV1Enabled = true
+            try? Database.shared.setPreference(key: "chat_cards_v1_enabled", value: "true")
+        }
+
         // Check current permission states
-        refreshPermissionStates()
+        refreshConnectionStates()
 
-        // Start in-process MCP server for context tools
-        MCPServer.shared.start()
+        // Start in-process MCP server for context tools (with retry)
+        MCPServer.shared.startWithRetry()
 
-        // Start agent task scheduler
-        AgentTaskScheduler.shared.start()
+        // Observe MCP server fatal failure
+        NotificationCenter.default.addObserver(
+            forName: .mcpServerFailed,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.logActivity(.error, "MCP server failed to start. Context tools unavailable.")
+        }
+
+        // Start jobs engine (compatibility wrapper over legacy scheduler/runtime)
+        JobService.shared.start()
 
         // Observe MCP tool call notifications for activity logging
         NotificationCenter.default.addObserver(
@@ -99,13 +133,14 @@ class AppState: ObservableObject {
 
     private func loadInitialData() async {
         // Run DB operations on background thread
-        let (loadedMessages, loadedSessions, costs) = await Task.detached(priority: .userInitiated) {
+        let (loadedMessages, loadedSessions, costs, operationEvents) = await Task.detached(priority: .userInitiated) {
             let messages = (try? Database.shared.loadRecentMessages(limit: 50, forSession: nil)) ?? []
             let sessions = (try? Database.shared.getRecentSessions(limit: 20)) ?? []
             let daily = (try? Database.shared.getDailyCost()) ?? 0
             let weekly = (try? Database.shared.getWeeklyCost()) ?? 0
             let monthly = (try? Database.shared.getMonthlyCost()) ?? 0
-            return (messages, sessions, (daily, weekly, monthly))
+            let operationEvents = (try? Database.shared.getRecentOperationEvents(limit: 50)) ?? []
+            return (messages, sessions, (daily, weekly, monthly), operationEvents)
         }.value
 
         // Update UI on main actor (we're already on MainActor due to class annotation)
@@ -114,6 +149,7 @@ class AppState: ObservableObject {
         self.dailyCost = costs.0
         self.weeklyCost = costs.1
         self.monthlyCost = costs.2
+        self.recentOperationEvents = operationEvents
 
         // Check CLI availability
         await checkCLIStatus()
@@ -133,321 +169,6 @@ class AppState: ObservableObject {
             logActivity(.context, "Reminders access active")
         }
     }
-
-    func checkPlanningNotifications() {
-        let today = DailyPlanningService.todayDateString
-        if let brief = try? Database.shared.getDailyBrief(for: today, type: .morning),
-           brief.readAt == nil && !brief.dismissed {
-            showPlanningNotificationBadge = true
-        } else {
-            showPlanningNotificationBadge = false
-        }
-    }
-
-    func refreshPermissionStates() {
-        let calendarStatus = EventKitManager.shared.calendarAuthorizationStatus()
-        calendarAccessGranted = calendarStatus == .fullAccess || calendarStatus == .writeOnly
-
-        let remindersStatus = EventKitManager.shared.remindersAuthorizationStatus()
-        remindersAccessGranted = remindersStatus == .fullAccess || remindersStatus == .writeOnly
-    }
-
-    func completeSetup() {
-        hasCompletedSetup = true
-        Task.detached(priority: .utility) {
-            try? Database.shared.setPreference(key: "setup_completed", value: "true")
-        }
-        refreshPermissionStates()
-        logActivity(.system, "Setup completed")
-    }
-
-    func setToolsEnabled(_ enabled: Bool) {
-        toolsEnabled = enabled
-        Task.detached(priority: .utility) {
-            try? Database.shared.setPreference(key: "tools_enabled", value: enabled ? "true" : "false")
-        }
-        logActivity(.system, enabled ? "Insecure mode enabled" : "Insecure mode disabled")
-    }
-
-    func checkCLIStatus() async {
-        let available = await claudeService.checkCLIAvailable()
-        let version = await claudeService.getCLIVersion()
-
-        self.cliAvailable = available
-        self.cliVersion = version
-
-        if !available {
-            logActivity(.error, "Claude CLI not found")
-        }
-    }
-
-    func loadConversationHistory() {
-        Task {
-            let sessionId = self.currentSessionId
-            let loadedMessages = await Task.detached(priority: .userInitiated) {
-                (try? Database.shared.loadRecentMessages(limit: 50, forSession: sessionId)) ?? []
-            }.value
-            self.messages = loadedMessages
-        }
-    }
-
-    func loadSessions() {
-        Task {
-            let loadedSessions = await Task.detached(priority: .userInitiated) {
-                (try? Database.shared.getRecentSessions(limit: 20)) ?? []
-            }.value
-            self.sessions = loadedSessions
-        }
-    }
-
-    func loadCostData() {
-        Task {
-            let costs = await Task.detached(priority: .userInitiated) {
-                let daily = (try? Database.shared.getDailyCost()) ?? 0
-                let weekly = (try? Database.shared.getWeeklyCost()) ?? 0
-                let monthly = (try? Database.shared.getMonthlyCost()) ?? 0
-                return (daily, weekly, monthly)
-            }.value
-            self.dailyCost = costs.0
-            self.weeklyCost = costs.1
-            self.monthlyCost = costs.2
-        }
-    }
-
-    /// Sends a message to Claude. Context is fetched on-demand via MCP tools.
-    func sendMessage(_ content: String) async {
-        let userMessage = ChatMessage(role: .user, content: content)
-        messages.append(userMessage)
-        isLoading = true
-
-        // Save user message in background
-        let sessionId = currentSessionId
-        Task.detached(priority: .utility) {
-            try? Database.shared.saveMessage(userMessage, forSession: sessionId)
-        }
-
-        // Ensure MCP server is running
-        if !MCPServer.shared.isRunning {
-            MCPServer.shared.start()
-        }
-
-        do {
-            let chatModel = await Task.detached(priority: .utility) {
-                (((try? Database.shared.getPreference(key: "claude_chat_model")) ?? nil) ?? "opus")
-            }.value
-
-            let permissionMode = await Task.detached(priority: .utility) {
-                (((try? Database.shared.getPreference(key: "claude_permission_mode")) ?? nil) ?? "plan")
-            }.value
-
-            let response = try await claudeService.sendMessage(
-                content,
-                history: messages,
-                toolsEnabled: toolsEnabled,
-                modelOverride: chatModel,
-                permissionModeOverride: permissionMode
-            )
-
-            // Parse actions from response
-            let parseResult = ActionParser.extractActions(from: response.result)
-            let displayText = parseResult.cleanText.isEmpty ? response.result : parseResult.cleanText
-
-            let assistantMessage = ChatMessage(
-                role: .assistant,
-                content: displayText,
-                cost: response.totalCostUsd,
-                model: response.model,
-                toolCalls: response.toolCalls
-            )
-
-            messages.append(assistantMessage)
-
-            // Handle parsed actions
-            if !parseResult.actions.isEmpty {
-                for action in parseResult.actions {
-                    let isSafe = ActionExecutor.safeActionTypes.contains(action.type)
-                        && !action.requiresUserApproval
-                    if isSafe {
-                        Task {
-                            let _ = await ActionExecutor.shared.execute(action)
-                        }
-                    } else {
-                        pendingActions.append(action)
-                        pendingApprovalCount += 1
-                    }
-                }
-            }
-
-            isLoading = false
-
-            // Speak response if voice is enabled
-            SpeechManager.shared.speak(displayText)
-
-            // Update session ID if we got one
-            if let newSessionId = response.sessionId {
-                currentSessionId = newSessionId
-            }
-
-            // Log tool calls to activity
-            if let toolCalls = response.toolCalls {
-                for tool in toolCalls {
-                    var toolMeta: [String: String] = ["Tool": tool.displayName]
-                    if let input = tool.input { toolMeta["Input"] = String(input.prefix(200)) }
-                    logActivity(.context, "Tool called: \(tool.displayName)", metadata: toolMeta)
-                }
-            }
-
-            // Persist session metadata and cost
-            let sessionToPersist = currentSessionId
-            let title = extractTitle(from: content)
-            let costToLog = response.totalCostUsd
-            await Task.detached(priority: .utility) {
-                if let sid = sessionToPersist {
-                    try? Database.shared.saveSession(id: sid, title: title)
-                    try? Database.shared.associateOrphanedMessages(withSession: sid)
-                }
-                if let cost = costToLog {
-                    try? Database.shared.logCost(amount: cost, sessionId: sessionToPersist)
-                }
-            }.value
-
-            loadCostData()
-            loadSessions()
-
-            // Log the interaction
-            var logMetadata: [String: String] = [:]
-            if let cost = costToLog {
-                logMetadata["Cost"] = String(format: "$%.4f", cost)
-            }
-            if let model = response.model {
-                logMetadata["Model"] = model
-            }
-            logActivity(.ai, "Response generated", metadata: logMetadata)
-
-            // Save assistant message in background
-            let finalSessionId = currentSessionId
-            Task.detached(priority: .utility) {
-                try? Database.shared.saveMessage(assistantMessage, forSession: finalSessionId)
-            }
-
-        } catch {
-            let errorMessage = ChatMessage(role: .assistant, content: "Error: \(error.localizedDescription)")
-            messages.append(errorMessage)
-            isLoading = false
-            logActivity(.error, "Request failed: \(error.localizedDescription)")
-        }
-    }
-
-    private func extractTitle(from message: String) -> String {
-        let truncated = String(message.prefix(50))
-        if let periodIndex = truncated.firstIndex(of: ".") {
-            return String(truncated[..<periodIndex])
-        }
-        if let newlineIndex = truncated.firstIndex(of: "\n") {
-            return String(truncated[..<newlineIndex])
-        }
-        return truncated
-    }
-
-    func clearHistory() {
-        messages = []
-        Task {
-            await claudeService.startNewConversation()
-        }
-        let sessionId = currentSessionId
-        currentSessionId = nil
-        Task.detached(priority: .utility) {
-            try? Database.shared.clearMessages(forSession: sessionId)
-        }
-        logActivity(.system, "History cleared")
-    }
-
-    func startNewConversation() {
-        messages = []
-        Task {
-            await claudeService.startNewConversation()
-        }
-        currentSessionId = nil
-        logActivity(.system, "New conversation started")
-    }
-
-    func resumeSession(_ session: Session) {
-        currentSessionId = session.id
-        Task {
-            await claudeService.resumeSession(session.id)
-        }
-        loadConversationHistory()
-        logActivity(.system, "Resumed session: \(session.title)")
-    }
-
-    func deleteSession(_ session: Session) {
-        let sessionId = session.id
-        Task.detached(priority: .utility) {
-            try? Database.shared.deleteSession(id: sessionId)
-        }
-        loadSessions()
-
-        if currentSessionId == session.id {
-            startNewConversation()
-        }
-    }
-
-    // MARK: - Action Approval
-
-    func approveAction(_ action: AssistantActionRequest) {
-        pendingActions.removeAll { $0.id == action.id }
-        pendingApprovalCount = max(0, pendingApprovalCount - 1)
-        Task {
-            let success = await ActionExecutor.shared.execute(action)
-            logActivity(.system, success ? "Action approved: \(action.title)" : "Action failed: \(action.title)")
-        }
-        Task.detached(priority: .utility) {
-            try? Database.shared.recordBehaviorEvent(type: .actionApproved, entityId: action.id)
-        }
-    }
-
-    func rejectAction(_ action: AssistantActionRequest) {
-        pendingActions.removeAll { $0.id == action.id }
-        pendingApprovalCount = max(0, pendingApprovalCount - 1)
-        logActivity(.system, "Action rejected: \(action.title)")
-        Task.detached(priority: .utility) {
-            try? Database.shared.recordBehaviorEvent(type: .actionRejected, entityId: action.id)
-        }
-    }
-
-    func approveAllActions() {
-        let actions = pendingActions
-        pendingActions.removeAll()
-        pendingApprovalCount = 0
-        for action in actions {
-            Task {
-                let success = await ActionExecutor.shared.execute(action)
-                logActivity(.system, success ? "Action approved: \(action.title)" : "Action failed: \(action.title)")
-            }
-        }
-    }
-
-    // MARK: - Activity Logging
-
-    func logActivity(_ type: ActivityLogEntry.ActivityType, _ message: String, metadata: [String: String]? = nil) {
-        let entry = ActivityLogEntry(type: type, message: message, metadata: metadata)
-        recentActivity.insert(entry, at: 0)
-
-        // Keep only last 100 entries for better audit trail
-        if recentActivity.count > 100 {
-            recentActivity = Array(recentActivity.prefix(100))
-        }
-    }
-
-    /// Log a security-related event with detailed metadata
-    func logSecurityEvent(_ action: String, allowed: Bool, details: [String: String] = [:]) {
-        var metadata = details
-        metadata["Allowed"] = allowed ? "Yes" : "No"
-        metadata["Time"] = SharedDateFormatters.iso8601.string(from: Date())
-
-        let message = allowed ? "Allowed: \(action)" : "Blocked: \(action)"
-        logActivity(.security, message, metadata: metadata)
-    }
 }
 
 // MARK: - Activity Log Entry
@@ -465,6 +186,7 @@ struct ActivityLogEntry: Identifiable {
         case ai
         case scheduler
         case security
+        case operation
         case error
 
         var icon: String {
@@ -474,6 +196,7 @@ struct ActivityLogEntry: Identifiable {
             case .ai: return "brain"
             case .scheduler: return "clock"
             case .security: return "lock.shield"
+            case .operation: return "checkmark.seal"
             case .error: return "exclamationmark.triangle"
             }
         }
@@ -485,6 +208,7 @@ struct ActivityLogEntry: Identifiable {
             case .ai: return .purple
             case .scheduler: return .orange
             case .security: return .indigo
+            case .operation: return .green
             case .error: return .red
             }
         }

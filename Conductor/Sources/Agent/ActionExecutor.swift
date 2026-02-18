@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Dispatches approved actions to the appropriate service.
 final class ActionExecutor {
@@ -33,7 +34,7 @@ final class ActionExecutor {
         case .sendEmail:
             return await sendEmail(payload)
         default:
-            print("[ActionExecutor] Unsupported action type: \(action.type)")
+            Log.action.error("Unsupported action type: \(String(describing: action.type), privacy: .public)")
             return false
         }
     }
@@ -44,6 +45,7 @@ final class ActionExecutor {
         let title = payload["title"] ?? "Untitled Task"
         let notes = payload["notes"]
         let priority = TodoTask.Priority(rawValue: Int(payload["priority"] ?? "0") ?? 0) ?? .none
+        let correlationId = payload["correlation_id"] ?? UUID().uuidString
 
         var dueDate: Date?
         if let dueDateStr = payload["due_date"] {
@@ -60,10 +62,52 @@ final class ActionExecutor {
 
         do {
             try Database.shared.createTask(task)
-            print("[ActionExecutor] Created task: \(title)")
+            let requestedThemeId = payload["theme_id"]
+            let requestedThemeName = payload["theme_name"]
+            let createIfMissing = payload["create_theme_if_missing"]?.lowercased() != "false"
+            let requestedColor = payload["theme_color"] ?? "blue"
+            let resolvedTheme = await ThemeService.shared.resolveTheme(
+                themeId: requestedThemeId,
+                themeName: requestedThemeName,
+                createIfMissing: createIfMissing,
+                color: requestedColor
+            )
+            await ThemeService.shared.assignTask(task.id, toThemeId: resolvedTheme?.id)
+
+            var payloadMeta: [String: String] = ["title": title]
+            if let dueDate {
+                payloadMeta["due_date"] = SharedDateFormatters.databaseDate.string(from: dueDate)
+            }
+            if let resolvedTheme {
+                payloadMeta["theme_id"] = resolvedTheme.id
+                payloadMeta["theme_name"] = resolvedTheme.name
+            } else {
+                payloadMeta["theme_name"] = "Loose"
+            }
+            _ = OperationLogService.shared.record(
+                operation: .created,
+                entityType: "todo_task",
+                entityId: task.id,
+                source: "action:createTodoTask",
+                status: .success,
+                message: "Created todo task '\(title)'",
+                payload: payloadMeta,
+                correlationId: correlationId
+            )
+            Log.action.info("Created task: \(title, privacy: .public)")
             return true
         } catch {
-            print("[ActionExecutor] Failed to create task: \(error)")
+            _ = OperationLogService.shared.record(
+                operation: .failed,
+                entityType: "todo_task",
+                entityId: task.id,
+                source: "action:createTodoTask",
+                status: .failed,
+                message: "Failed to create todo task '\(title)': \(error.localizedDescription)",
+                payload: ["title": title],
+                correlationId: correlationId
+            )
+            Log.action.error("Failed to create task: \(error.localizedDescription, privacy: .public)")
             return false
         }
     }
@@ -73,6 +117,7 @@ final class ActionExecutor {
               var task = try? Database.shared.getTask(id: taskId) else {
             return false
         }
+        let correlationId = payload["correlation_id"] ?? UUID().uuidString
 
         if let title = payload["title"] { task.title = title }
         if let notes = payload["notes"] { task.notes = notes }
@@ -84,20 +129,58 @@ final class ActionExecutor {
 
         do {
             try Database.shared.updateTask(task)
+            _ = OperationLogService.shared.record(
+                operation: .updated,
+                entityType: "todo_task",
+                entityId: task.id,
+                source: "action:updateTodoTask",
+                status: .success,
+                message: "Updated todo task '\(task.title)'",
+                correlationId: correlationId
+            )
             return true
         } catch {
-            print("[ActionExecutor] Failed to update task: \(error)")
+            _ = OperationLogService.shared.record(
+                operation: .failed,
+                entityType: "todo_task",
+                entityId: task.id,
+                source: "action:updateTodoTask",
+                status: .failed,
+                message: "Failed to update todo task '\(task.title)': \(error.localizedDescription)",
+                correlationId: correlationId
+            )
+            Log.action.error("Failed to update task: \(error.localizedDescription, privacy: .public)")
             return false
         }
     }
 
     private func deleteTodoTask(_ payload: [String: String]) async -> Bool {
         guard let taskId = payload["id"] else { return false }
+        let correlationId = payload["correlation_id"] ?? UUID().uuidString
+        let taskTitle = ((try? Database.shared.getTask(id: taskId)) ?? nil)?.title ?? taskId
         do {
             try Database.shared.deleteTask(id: taskId)
+            _ = OperationLogService.shared.record(
+                operation: .deleted,
+                entityType: "todo_task",
+                entityId: taskId,
+                source: "action:deleteTodoTask",
+                status: .success,
+                message: "Deleted todo task '\(taskTitle)'",
+                correlationId: correlationId
+            )
             return true
         } catch {
-            print("[ActionExecutor] Failed to delete task: \(error)")
+            _ = OperationLogService.shared.record(
+                operation: .failed,
+                entityType: "todo_task",
+                entityId: taskId,
+                source: "action:deleteTodoTask",
+                status: .failed,
+                message: "Failed to delete todo task '\(taskTitle)': \(error.localizedDescription)",
+                correlationId: correlationId
+            )
+            Log.action.error("Failed to delete task: \(error.localizedDescription, privacy: .public)")
             return false
         }
     }
@@ -113,10 +196,10 @@ final class ActionExecutor {
 
         do {
             try Database.shared.saveDailyGoal(goal)
-            print("[ActionExecutor] Created goal: \(text)")
+            Log.action.info("Created goal: \(text, privacy: .public)")
             return true
         } catch {
-            print("[ActionExecutor] Failed to create goal: \(error)")
+            Log.action.error("Failed to create goal: \(error.localizedDescription, privacy: .public)")
             return false
         }
     }
@@ -127,7 +210,7 @@ final class ActionExecutor {
             try Database.shared.markGoalCompleted(id: goalId)
             return true
         } catch {
-            print("[ActionExecutor] Failed to complete goal: \(error)")
+            Log.action.error("Failed to complete goal: \(error.localizedDescription, privacy: .public)")
             return false
         }
     }
@@ -139,25 +222,55 @@ final class ActionExecutor {
         let startStr = payload["start_date"] ?? payload["start"]
         let endStr = payload["end_date"] ?? payload["end"]
         let location = payload["location"]
+        let correlationId = payload["correlation_id"] ?? UUID().uuidString
 
         guard let startStr, let start = parseDateTime(startStr) else {
-            print("[ActionExecutor] Missing or invalid start date for calendar event")
+            Log.action.error("Missing or invalid start date for calendar event")
+            _ = OperationLogService.shared.record(
+                operation: .failed,
+                entityType: "calendar_event",
+                source: "action:createCalendarEvent",
+                status: .failed,
+                message: "Missing or invalid start date for calendar event '\(title)'",
+                correlationId: correlationId
+            )
             return false
         }
 
         let end = endStr.flatMap(parseDateTime) ?? start.addingTimeInterval(3600)
 
         do {
-            try await EventKitManager.shared.createCalendarEvent(
+            let eventId = try await EventKitManager.shared.createCalendarEvent(
                 title: title,
                 startDate: start,
                 endDate: end,
                 notes: location.map { "Location: \($0)" }
             )
-            print("[ActionExecutor] Created calendar event: \(title)")
+            _ = OperationLogService.shared.record(
+                operation: .created,
+                entityType: "calendar_event",
+                entityId: eventId,
+                source: "action:createCalendarEvent",
+                status: .success,
+                message: "Created calendar event '\(title)'",
+                payload: [
+                    "start_date": SharedDateFormatters.iso8601DateTime.string(from: start),
+                    "end_date": SharedDateFormatters.iso8601DateTime.string(from: end)
+                ],
+                correlationId: correlationId
+            )
+            Log.action.info("Created calendar event: \(title, privacy: .public)")
             return true
         } catch {
-            print("[ActionExecutor] Failed to create calendar event: \(error)")
+            _ = OperationLogService.shared.record(
+                operation: .failed,
+                entityType: "calendar_event",
+                source: "action:createCalendarEvent",
+                status: .failed,
+                message: "Failed to create calendar event '\(title)': \(error.localizedDescription)",
+                correlationId: correlationId
+            )
+            Log.action.error("Failed to create calendar event: \(error.localizedDescription, privacy: .public)")
             return false
         }
     }
@@ -171,10 +284,10 @@ final class ActionExecutor {
 
         do {
             _ = try await EventKitManager.shared.createReminder(title: title, dueDate: dueDate)
-            print("[ActionExecutor] Created reminder: \(title)")
+            Log.action.info("Created reminder: \(title, privacy: .public)")
             return true
         } catch {
-            print("[ActionExecutor] Failed to create reminder: \(error)")
+            Log.action.error("Failed to create reminder: \(error.localizedDescription, privacy: .public)")
             return false
         }
     }
@@ -185,7 +298,7 @@ final class ActionExecutor {
         guard let to = payload["to"],
               let subject = payload["subject"],
               let body = payload["body"] else {
-            print("[ActionExecutor] Missing required email fields")
+            Log.action.error("Missing required email fields")
             return false
         }
 

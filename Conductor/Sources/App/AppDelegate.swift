@@ -35,6 +35,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         unregisterGlobalHotkey()
         ProactiveEngine.shared.stop()
+        JobService.shared.stop()
     }
 
     // MARK: - Status Item
@@ -175,9 +176,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if status == noErr {
             hotKeyRef = gMyHotKeyRef
             installHotKeyHandler()
-            print("Global hotkey registered: Cmd+Shift+C")
+            Log.app.info("Global hotkey registered: Cmd+Shift+C")
         } else {
-            print("Failed to register global hotkey: \(status)")
+            Log.app.error("Failed to register global hotkey: \(status)")
         }
     }
 

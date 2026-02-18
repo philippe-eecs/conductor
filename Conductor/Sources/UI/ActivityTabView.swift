@@ -27,7 +27,15 @@ struct ActivityTabView: View {
             // Activity list
             ScrollView {
                 VStack(spacing: 8) {
-                    if filteredActivity.isEmpty {
+                    if selectedFilter == .operations {
+                        if filteredOperationEvents.isEmpty {
+                            emptyStateView
+                        } else {
+                            ForEach(filteredOperationEvents) { event in
+                                OperationEventRowView(event: event)
+                            }
+                        }
+                    } else if filteredActivity.isEmpty {
                         emptyStateView
                     } else {
                         ForEach(filteredActivity) { entry in
@@ -109,7 +117,7 @@ struct ActivityTabView: View {
             Spacer()
 
             // Entry count
-            Text("\(filteredActivity.count) entries")
+            Text("\(selectedFilter == .operations ? filteredOperationEvents.count : filteredActivity.count) entries")
                 .font(.caption)
                 .foregroundColor(.secondary)
         }
@@ -130,6 +138,22 @@ struct ActivityTabView: View {
         if !searchText.isEmpty {
             let searchLower = searchText.lowercased()
             result = result.filter { $0.message.lowercased().contains(searchLower) }
+        }
+
+        return result
+    }
+
+    private var filteredOperationEvents: [OperationEvent] {
+        var result = appState.recentOperationEvents
+
+        if !searchText.isEmpty {
+            let searchLower = searchText.lowercased()
+            result = result.filter { event in
+                event.message.lowercased().contains(searchLower) ||
+                event.entityType.lowercased().contains(searchLower) ||
+                event.operation.rawValue.lowercased().contains(searchLower) ||
+                event.status.rawValue.lowercased().contains(searchLower)
+            }
         }
 
         return result
@@ -174,6 +198,7 @@ enum ActivityFilter: String, CaseIterable, Identifiable {
     case scheduler
     case security
     case context
+    case operations
 
     var id: String { rawValue }
 
@@ -185,6 +210,7 @@ enum ActivityFilter: String, CaseIterable, Identifiable {
         case .scheduler: return "Scheduler"
         case .security: return "Security"
         case .context: return "Context"
+        case .operations: return "Operations"
         }
     }
 
@@ -196,6 +222,7 @@ enum ActivityFilter: String, CaseIterable, Identifiable {
         case .scheduler: return "clock"
         case .security: return "lock.shield"
         case .context: return "doc.text"
+        case .operations: return "checkmark.seal"
         }
     }
 
@@ -207,6 +234,7 @@ enum ActivityFilter: String, CaseIterable, Identifiable {
         case .scheduler: return .scheduler
         case .security: return .security
         case .context: return .context
+        case .operations: return nil
         }
     }
 }
@@ -294,8 +322,55 @@ struct ActivityRowView: View {
             return Color.orange.opacity(0.1)
         case .security:
             return Color.purple.opacity(0.1)
+        case .operation:
+            return Color.green.opacity(0.1)
         default:
             return Color(NSColor.controlBackgroundColor)
+        }
+    }
+}
+
+struct OperationEventRowView: View {
+    let event: OperationEvent
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text(event.formattedTime)
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .frame(width: 50, alignment: .leading)
+
+            Image(systemName: event.statusIcon)
+                .font(.caption)
+                .foregroundColor(statusColor)
+                .frame(width: 16)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(event.message)
+                    .font(.callout)
+                Text("\(event.operation.rawValue) • \(event.entityType) • \(event.status.rawValue)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                if let entityId = event.entityId {
+                    Text(entityId)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .textSelection(.enabled)
+                }
+            }
+
+            Spacer()
+        }
+        .padding(8)
+        .background(Color(NSColor.controlBackgroundColor))
+        .cornerRadius(6)
+    }
+
+    private var statusColor: Color {
+        switch event.status {
+        case .success: return .green
+        case .failed: return .red
+        case .partialSuccess: return .orange
         }
     }
 }

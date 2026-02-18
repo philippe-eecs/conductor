@@ -140,7 +140,7 @@ struct EmailsTabView: View {
     }
 
     private func dismissEmail(_ email: ProcessedEmail) {
-        try? EmailStore(database: Database.shared).dismissEmail(id: email.id)
+        try? Database.shared.dismissProcessedEmail(id: email.id)
         loadEmails()
     }
 
@@ -150,7 +150,7 @@ struct EmailsTabView: View {
     }
 
     private func loadEmails() {
-        emails = (try? EmailStore(database: Database.shared).getProcessedEmails(filter: selectedFilter)) ?? []
+        emails = (try? Database.shared.getProcessedEmails(filter: selectedFilter)) ?? []
     }
 }
 

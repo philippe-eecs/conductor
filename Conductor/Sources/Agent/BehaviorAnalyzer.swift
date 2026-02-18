@@ -10,23 +10,22 @@ final class BehaviorAnalyzer {
 
     /// Generate a compact insights summary for injection into morning briefs and system prompts.
     func generateInsights() -> BehaviorInsights {
-        let store = BehaviorStore(database: database)
         let thirtyDaysAgo = Date().addingTimeInterval(-30 * 86400)
 
         // Peak productivity hours
-        let completionsByHour = (try? store.getEventCountByHour(type: .taskCompleted, days: 30)) ?? [:]
+        let completionsByHour = (try? database.getEventCountByHour(type: .taskCompleted, days: 30)) ?? [:]
         let peakHours = findPeakHours(completionsByHour)
 
         // Goal completion patterns
-        let goalCompletions = (try? store.getTotalCount(type: .goalCompleted, since: thirtyDaysAgo)) ?? 0
-        let goalRollovers = (try? store.getTotalCount(type: .goalRolled, since: thirtyDaysAgo)) ?? 0
+        let goalCompletions = (try? database.getTotalCount(type: .goalCompleted, since: thirtyDaysAgo)) ?? 0
+        let goalRollovers = (try? database.getTotalCount(type: .goalRolled, since: thirtyDaysAgo)) ?? 0
 
         // Deferral patterns
-        let deferrals = (try? store.getTotalCount(type: .taskDeferred, since: thirtyDaysAgo)) ?? 0
+        let deferrals = (try? database.getTotalCount(type: .taskDeferred, since: thirtyDaysAgo)) ?? 0
 
         // Action approval rate
-        let approvals = (try? store.getTotalCount(type: .actionApproved, since: thirtyDaysAgo)) ?? 0
-        let rejections = (try? store.getTotalCount(type: .actionRejected, since: thirtyDaysAgo)) ?? 0
+        let approvals = (try? database.getTotalCount(type: .actionApproved, since: thirtyDaysAgo)) ?? 0
+        let rejections = (try? database.getTotalCount(type: .actionRejected, since: thirtyDaysAgo)) ?? 0
         let approvalRate: Double
         if approvals + rejections > 0 {
             approvalRate = Double(approvals) / Double(approvals + rejections)
@@ -35,7 +34,7 @@ final class BehaviorAnalyzer {
         }
 
         // Day-of-week productivity
-        let completionsByDay = (try? store.getEventCountByDayOfWeek(type: .taskCompleted, days: 30)) ?? [:]
+        let completionsByDay = (try? database.getEventCountByDayOfWeek(type: .taskCompleted, days: 30)) ?? [:]
         let mostProductiveDay = findMostProductiveDay(completionsByDay)
 
         return BehaviorInsights(

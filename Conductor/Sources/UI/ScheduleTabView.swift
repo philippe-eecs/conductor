@@ -25,6 +25,8 @@ struct ScheduleTabView: View {
     @State private var weekEvents: [EventKitManager.CalendarEvent] = []
     @State private var selectedDayEvents: [EventKitManager.CalendarEvent] = []
     @State private var selectedDayTasks: [TodoTask] = []
+    @State private var weekBlocks: [ThemeBlock] = []
+    @State private var blockThemes: [String: Theme] = [:]
     @State private var isLoading = false
     @State private var showDayDetail = false
 
@@ -65,6 +67,7 @@ struct ScheduleTabView: View {
                 await loadMonthEvents()
             }
             await loadSelectedDayTasks()
+            await loadWeekBlocks()
         }
         .onChange(of: currentMonth) { _, _ in
             Task {
@@ -82,6 +85,7 @@ struct ScheduleTabView: View {
                     await loadMonthEvents()
                 }
                 await loadSelectedDayTasks()
+                await loadWeekBlocks()
             }
         }
         .onChange(of: selectedDate) { _, _ in
@@ -91,6 +95,7 @@ struct ScheduleTabView: View {
                     await loadWeekEvents()
                 }
                 await loadSelectedDayTasks()
+                await loadWeekBlocks()
             }
         }
         .sheet(isPresented: $showDayDetail) {
@@ -173,6 +178,10 @@ struct ScheduleTabView: View {
                     }
 
                     agendaCalendarSection
+
+                    Divider()
+
+                    agendaBlocksSection
 
                     Divider()
 
@@ -313,6 +322,105 @@ struct ScheduleTabView: View {
         .accessibilityElement(children: .combine)
     }
 
+    private var agendaBlocksSection: some View {
+        let blocks = blocksForDay(selectedDate)
+
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Theme Blocks")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Spacer()
+                if !blocks.isEmpty {
+                    Text("\(blocks.count)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            if blocks.isEmpty {
+                Text("No theme blocks")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(NSColor.controlBackgroundColor))
+                    .cornerRadius(8)
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(blocks, id: \.id) { block in
+                        agendaBlockRow(block)
+                    }
+                }
+            }
+        }
+    }
+
+    private func agendaBlockRow(_ block: ThemeBlock) -> some View {
+        let theme = blockThemes[block.themeId]
+        let timeLabel = "\(SharedDateFormatters.time12Hour.string(from: block.startTime)) – \(SharedDateFormatters.time12Hour.string(from: block.endTime))"
+
+        return HStack(spacing: 8) {
+            Circle()
+                .fill(theme?.swiftUIColor ?? .blue)
+                .frame(width: 8, height: 8)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(theme?.name ?? "Theme Block")
+                    .font(.callout)
+                    .fontWeight(.medium)
+                Text(timeLabel)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            Spacer()
+            blockStatusBadge(block.status)
+        }
+        .padding(10)
+        .background(blockBackground(block.status, color: theme?.swiftUIColor ?? .blue))
+        .cornerRadius(8)
+    }
+
+    @ViewBuilder
+    private func blockStatusBadge(_ status: ThemeBlock.Status) -> some View {
+        switch status {
+        case .draft:
+            Text("Draft")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color.secondary.opacity(0.1))
+                .cornerRadius(4)
+        case .planned:
+            Text("Planned")
+                .font(.caption2)
+                .foregroundColor(.blue)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color.blue.opacity(0.1))
+                .cornerRadius(4)
+        case .published:
+            Text("Published")
+                .font(.caption2)
+                .foregroundColor(.green)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color.green.opacity(0.1))
+                .cornerRadius(4)
+        }
+    }
+
+    private func blockBackground(_ status: ThemeBlock.Status, color: Color) -> Color {
+        switch status {
+        case .draft:
+            return color.opacity(0.05)
+        case .planned:
+            return color.opacity(0.08)
+        case .published:
+            return color.opacity(0.12)
+        }
+    }
+
     // MARK: - Month View
 
     private var monthView: some View {
@@ -440,7 +548,9 @@ struct ScheduleTabView: View {
                             WeekHourCell(
                                 date: date,
                                 hour: hour,
-                                events: eventsForDayAndHour(date, hour: hour)
+                                events: eventsForDayAndHour(date, hour: hour),
+                                themeBlocks: blocksForDayAndHour(date, hour: hour),
+                                blockThemes: blockThemes
                             )
                         }
                     }
@@ -657,6 +767,48 @@ struct ScheduleTabView: View {
         return "\(start) – \(end)"
     }
 
+    private func blocksForDay(_ date: Date) -> [ThemeBlock] {
+        weekBlocks.filter { calendar.isDate($0.startTime, inSameDayAs: date) }
+    }
+
+    private func blocksForDayAndHour(_ date: Date, hour: Int) -> [ThemeBlock] {
+        weekBlocks.filter { block in
+            guard calendar.isDate(block.startTime, inSameDayAs: date) else { return false }
+            let blockHour = calendar.component(.hour, from: block.startTime)
+            return blockHour == hour
+        }
+    }
+
+    private func loadWeekBlocks() async {
+        let date = selectedDate
+        let cal = calendar
+        let blocks = await Task.detached(priority: .utility) {
+            var allBlocks: [ThemeBlock] = []
+            guard let weekInterval = cal.dateInterval(of: .weekOfYear, for: date) else { return allBlocks }
+            for offset in 0..<7 {
+                guard let day = cal.date(byAdding: .day, value: offset, to: weekInterval.start) else { continue }
+                let dayBlocks = (try? Database.shared.getThemeBlocksForDay(day)) ?? []
+                allBlocks.append(contentsOf: dayBlocks)
+            }
+            return allBlocks
+        }.value
+
+        // Load theme data for blocks
+        let themeIds = Set(blocks.map(\.themeId))
+        let themes = await Task.detached(priority: .utility) {
+            var map: [String: Theme] = [:]
+            for id in themeIds {
+                if let theme = try? Database.shared.getTheme(id: id) {
+                    map[id] = theme
+                }
+            }
+            return map
+        }.value
+
+        weekBlocks = blocks
+        blockThemes = themes
+    }
+
     private func loadMonthEvents() async {
         isLoading = true
         defer { isLoading = false }
@@ -776,6 +928,8 @@ struct WeekHourCell: View {
     let date: Date
     let hour: Int
     let events: [EventKitManager.CalendarEvent]
+    var themeBlocks: [ThemeBlock] = []
+    var blockThemes: [String: Theme] = [:]
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -797,9 +951,42 @@ struct WeekHourCell: View {
                 }
                 .padding(2)
             }
+
+            if !themeBlocks.isEmpty {
+                VStack(alignment: .leading, spacing: 1) {
+                    ForEach(themeBlocks.prefix(2), id: \.id) { block in
+                        let theme = blockThemes[block.themeId]
+                        let color = theme?.swiftUIColor ?? .blue
+                        Text(theme?.name ?? "Block")
+                            .font(.caption2)
+                            .lineLimit(1)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(blockCellBackground(block.status, color: color))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 2)
+                                    .stroke(
+                                        color.opacity(0.5),
+                                        style: StrokeStyle(lineWidth: 1, dash: block.status == .draft ? [3, 2] : [])
+                                    )
+                            )
+                            .cornerRadius(2)
+                    }
+                }
+                .padding(2)
+                .offset(y: events.isEmpty ? 0 : 18)
+            }
         }
         .frame(maxWidth: .infinity)
         .border(Color.secondary.opacity(0.1), width: 0.5)
+    }
+
+    private func blockCellBackground(_ status: ThemeBlock.Status, color: Color) -> Color {
+        switch status {
+        case .draft: return color.opacity(0.15)
+        case .planned: return color.opacity(0.25)
+        case .published: return color.opacity(0.4)
+        }
     }
 }
 
