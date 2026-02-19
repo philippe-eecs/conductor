@@ -1,5 +1,12 @@
 import Foundation
 
+/// Pre-fetched context snapshot passed to the system prompt on new conversations.
+struct ChatContext {
+    let todayEvents: [EventKitManager.CalendarEvent]
+    let projects: [ProjectRepository.ProjectSummary]
+    let openTodos: [Todo]
+}
+
 /// Service that interfaces with the Claude CLI as a subprocess.
 /// Simplified for v2: no command validation, no blocklists.
 actor ClaudeService {
@@ -43,6 +50,7 @@ actor ClaudeService {
         let num_turns: Int?
         let is_error: Bool?
         let model: String?
+        let toolCallNames: [String]?
 
         enum CodingKeys: String, CodingKey {
             case result
@@ -52,6 +60,7 @@ actor ClaudeService {
             case num_turns
             case is_error
             case model
+            case toolCallNames = "tool_call_names"
         }
     }
 
@@ -113,18 +122,19 @@ actor ClaudeService {
         _ userMessage: String,
         history: [Message],
         toolsEnabled: Bool = false,
-        modelOverride: String? = nil
+        modelOverride: String? = nil,
+        context: ChatContext? = nil
     ) async throws -> ClaudeResponse {
         let trimmedOverride = modelOverride?.trimmingCharacters(in: .whitespacesAndNewlines)
         let chosenModel = (trimmedOverride?.isEmpty == false) ? trimmedOverride! : model
 
         var args = ["--print", "--verbose", "--input-format", "text", "--output-format", "stream-json", "--model", chosenModel]
 
-        // Always enable MCP tools
+        // Always enable MCP tools; override global settings to avoid plan mode
         args += ["--tools", "default"]
-        args += ["--permission-mode", "plan"]
+        args += ["--permission-mode", "default"]
 
-        // Block all built-in execution tools — only MCP tools remain usable
+        // Block all built-in and meta tools — only MCP tools remain usable
         args += ["--disallowed-tools", Self.allBuiltinToolsArgument]
 
         if let mcpConfigPath = mcpConfigPathProvider() {
@@ -135,7 +145,7 @@ actor ClaudeService {
         if let sessionId = currentSessionId {
             args += ["--resume", sessionId]
         } else {
-            args += ["--append-system-prompt", buildSystemPrompt()]
+            args += ["--append-system-prompt", buildSystemPrompt(context: context)]
         }
 
         let result = try await runClaudeCLI(args, stdin: (userMessage + "\n").data(using: .utf8))
@@ -165,12 +175,12 @@ actor ClaudeService {
     func executeBlinkPrompt(_ prompt: String) async throws -> ClaudeResponse {
         var args = ["--print", "--verbose", "--input-format", "text", "--output-format", "stream-json", "--model", "sonnet"]
         args += ["--max-turns", "1"]
+        args += ["--permission-mode", "default"]
 
         // Blink doesn't need tools — just context analysis
         if let mcpConfigPath = mcpConfigPathProvider() {
             args += ["--mcp-config", mcpConfigPath]
             args += ["--tools", "default"]
-            args += ["--permission-mode", "plan"]
             args += ["--disallowed-tools", Self.allBuiltinToolsArgument]
             args += ["--allowedTools", Self.allowedMCPToolsArgument]
         }
@@ -196,7 +206,7 @@ actor ClaudeService {
 
         var args = ["--print", "--verbose", "--input-format", "text", "--output-format", "stream-json", "--model", chosenModel]
         args += ["--tools", "default"]
-        args += ["--permission-mode", "plan"]
+        args += ["--permission-mode", "default"]
         args += ["--disallowed-tools", Self.allBuiltinToolsArgument]
 
         if let mcpConfigPath = mcpConfigPathProvider() {
@@ -315,30 +325,73 @@ actor ClaudeService {
         }
     }
 
-    private func buildSystemPrompt() -> String {
-        """
+    private func buildSystemPrompt(context: ChatContext?) -> String {
+        var sections: [String] = []
+
+        sections.append("""
         You are Conductor, a personal AI assistant running as a macOS menubar app.
         You help users manage their day, projects, and tasks.
 
         Current date and time: \(SharedDateFormatters.fullDateTime.string(from: now()))
+        """)
 
-        ## Your MCP Tools
-        You have MCP tools provided by the "conductor-context" server:
-        - conductor_get_calendar: Fetch calendar events for any date range
-        - conductor_get_reminders: Fetch reminders/tasks
-        - conductor_get_projects: List all projects with their TODOs
-        - conductor_get_todos: Get TODOs, optionally filtered by project
-        - conductor_create_project: Create a new project
-        - conductor_create_todo: Create a new TODO
-        - conductor_update_todo: Update or complete a TODO
+        // Pre-fetched context snapshot
+        if let ctx = context {
+            // Calendar
+            if ctx.todayEvents.isEmpty {
+                sections.append("Today's calendar: No events.")
+            } else {
+                let lines = ctx.todayEvents.map { event in
+                    let time = event.isAllDay ? "All day" : "\(SharedDateFormatters.shortTime.string(from: event.startDate)) - \(SharedDateFormatters.shortTime.string(from: event.endDate))"
+                    return "- \(time): \(event.title)"
+                }.joined(separator: "\n")
+                sections.append("Today's calendar:\n\(lines)")
+            }
+
+            // Projects
+            if ctx.projects.isEmpty {
+                sections.append("Projects: None yet.")
+            } else {
+                let lines = ctx.projects.map { summary in
+                    "- \(summary.project.name) (\(summary.openTodoCount) open TODOs)"
+                }.joined(separator: "\n")
+                sections.append("Projects:\n\(lines)")
+            }
+
+            // Open TODOs
+            if ctx.openTodos.isEmpty {
+                sections.append("Open TODOs: None.")
+            } else {
+                let lines = ctx.openTodos.prefix(20).map { todo in
+                    let priority = todo.priority > 0 ? " [P\(todo.priority)]" : ""
+                    let due = todo.dueDate.map { " (due \(SharedDateFormatters.shortMonthDay.string(from: $0)))" } ?? ""
+                    return "- \(todo.title)\(priority)\(due)"
+                }.joined(separator: "\n")
+                sections.append("Open TODOs (\(ctx.openTodos.count) total):\n\(lines)")
+            }
+        }
+
+        sections.append("""
+        ## MCP Tools
+        You have tools to read and modify the user's data:
+        - conductor_get_calendar / conductor_get_reminders: Fetch calendar or reminders for any date range
+        - conductor_get_projects / conductor_get_todos: List projects or TODOs (with filters)
+        - conductor_create_project / conductor_create_todo / conductor_update_todo: Create or modify data
         - conductor_create_calendar_block: Create a calendar event for time blocking
-        - conductor_dispatch_agent: Dispatch an AI agent to work on a TODO
+        - conductor_dispatch_agent: Dispatch a background AI agent to work on a TODO
 
-        IMPORTANT: When the user asks about their schedule, projects, tasks, or calendar —
-        call the appropriate MCP tools. Do NOT guess or say you can't access their data.
+        The snapshot above is your starting context. Use MCP tools when the user asks for
+        fresh data, different date ranges, or to create/modify anything.
 
-        Be concise and actionable. Use bullet points and clear formatting.
-        """
+        ## CRITICAL RULES
+        - Execute actions DIRECTLY. When the user asks you to create something, call the tool immediately.
+        - NEVER create placeholder or temporary items. NEVER create items just to delete or complete them.
+        - NEVER write plans or ask for confirmation before acting. Just do what the user asks.
+        - If the user asks to create 5 TODOs, call conductor_create_todo 5 times with the real titles.
+        - Keep responses short. A brief summary after completing the action is enough.
+        """)
+
+        return sections.joined(separator: "\n\n")
     }
 
     private static let allowedMCPToolsArgument = [
@@ -355,7 +408,9 @@ actor ClaudeService {
 
     private static let allBuiltinToolsArgument = [
         "Bash", "Read", "Write", "Edit", "Glob", "Grep",
-        "WebFetch", "WebSearch", "NotebookEdit"
+        "WebFetch", "WebSearch", "NotebookEdit",
+        "Task", "TaskOutput", "ExitPlanMode", "TodoWrite", "TaskStop",
+        "AskUserQuestion", "Skill", "EnterPlanMode", "ToolSearch"
     ].joined(separator: ",")
 }
 
@@ -409,6 +464,7 @@ extension ClaudeService {
             var durationMs: Int?
             var numTurns: Int?
             var model: String?
+            var toolCallNames: [String] = []
 
             let decoder = JSONDecoder()
 
@@ -429,6 +485,8 @@ extension ClaudeService {
                             for block in blocks {
                                 if block.type == "text", let text = block.text {
                                     resultText += text
+                                } else if block.type == "tool_use", let name = block.name {
+                                    toolCallNames.append(name)
                                 }
                             }
                         }
@@ -444,8 +502,17 @@ extension ClaudeService {
 
                 default:
                     if let content = event.message?.content {
-                        if case .text(let text) = content {
+                        switch content {
+                        case .text(let text):
                             resultText += text
+                        case .blocks(let blocks):
+                            for block in blocks {
+                                if block.type == "text", let text = block.text {
+                                    resultText += text
+                                } else if block.type == "tool_use", let name = block.name {
+                                    toolCallNames.append(name)
+                                }
+                            }
                         }
                     }
                     if let sid = event.session_id { sessionId = sid }
@@ -465,7 +532,8 @@ extension ClaudeService {
                 duration_ms: durationMs,
                 num_turns: numTurns,
                 is_error: isError,
-                model: model
+                model: model,
+                toolCallNames: toolCallNames.isEmpty ? nil : toolCallNames
             )
         }
     }

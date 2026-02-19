@@ -280,7 +280,19 @@ final class MCPToolHandlers: @unchecked Sendable {
 
         let todo = try repo.createTodo(title: title, priority: priority, dueDate: dueDate, projectId: projectId)
 
+        // Resolve project name for display
+        var projectName: String?
+        if let pid = projectId, let project = try? repo.project(id: pid) {
+            projectName = project.name
+        }
+
         notifyProjectsChanged()
+        notifyOperationReceipt(OperationReceiptData(
+            entityType: "todo", entityName: title, entityId: todo.id, operation: .created,
+            priority: priority > 0 ? priority : nil,
+            dueDate: dueDate,
+            projectName: projectName
+        ))
 
         return contentResult([
             "id": todo.id ?? 0,
@@ -309,7 +321,21 @@ final class MCPToolHandlers: @unchecked Sendable {
 
         try repo.updateTodo(todo)
 
+        // Resolve project name for display
+        var projectName: String?
+        if let pid = todo.projectId, let project = try? repo.project(id: pid) {
+            projectName = project.name
+        }
+
         notifyProjectsChanged()
+
+        let op: OperationType = (args["completed"] as? Bool == true) ? .completed : .updated
+        notifyOperationReceipt(OperationReceiptData(
+            entityType: "todo", entityName: todo.title, entityId: todo.id, operation: op,
+            priority: todo.priority > 0 ? todo.priority : nil,
+            dueDate: todo.dueDate,
+            projectName: projectName
+        ))
 
         return contentResult([
             "id": todo.id ?? 0,
@@ -331,6 +357,9 @@ final class MCPToolHandlers: @unchecked Sendable {
         let project = try repo.createProject(name: name, color: color, description: description)
 
         notifyProjectsChanged()
+        notifyOperationReceipt(OperationReceiptData(
+            entityType: "project", entityName: name, entityId: project.id, operation: .created
+        ))
 
         return contentResult([
             "id": project.id ?? 0,
@@ -360,6 +389,10 @@ final class MCPToolHandlers: @unchecked Sendable {
             title: title, startDate: startDate, endDate: endDate, notes: notes
         )
 
+        notifyOperationReceipt(OperationReceiptData(
+            entityType: "calendar_event", entityName: title, entityId: nil, operation: .created
+        ))
+
         return contentResult([
             "event_id": eventId,
             "title": title,
@@ -385,6 +418,10 @@ final class MCPToolHandlers: @unchecked Sendable {
         Task.detached {
             await AgentDispatcher.shared.execute(runId: run.id!, todoId: todoId, prompt: prompt)
         }
+
+        notifyOperationReceipt(OperationReceiptData(
+            entityType: "agent", entityName: "Agent for: \(todo.title)", entityId: run.id, operation: .dispatched
+        ))
 
         return contentResult([
             "agent_run_id": run.id ?? 0,
@@ -424,5 +461,9 @@ final class MCPToolHandlers: @unchecked Sendable {
         DispatchQueue.main.async {
             AppState.shared.loadProjects()
         }
+    }
+
+    private func notifyOperationReceipt(_ receipt: OperationReceiptData) {
+        NotificationCenter.default.post(name: .mcpOperationReceipt, object: receipt)
     }
 }

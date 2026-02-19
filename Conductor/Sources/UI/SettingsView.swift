@@ -7,26 +7,6 @@ struct SettingsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header
-            HStack {
-                Button {
-                    appState.showSettings = false
-                } label: {
-                    Image(systemName: "chevron.left")
-                    Text("Back")
-                }
-                .buttonStyle(.plain)
-                Spacer()
-                Text("Settings")
-                    .font(.headline)
-                Spacer()
-                // Balance
-                Color.clear.frame(width: 60)
-            }
-            .padding()
-
-            Divider()
-
             Form {
                 Section("Claude CLI") {
                     HStack {

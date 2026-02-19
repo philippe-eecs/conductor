@@ -129,6 +129,7 @@ struct Message: Codable, FetchableRecord, PersistableRecord, Identifiable {
     var content: String
     var sessionId: String?
     var costUsd: Double?
+    var model: String?
     var createdAt: Date
 
     static let databaseTableName = "messages"

@@ -1,6 +1,10 @@
 import SwiftUI
 import Combine
 
+extension Notification.Name {
+    static let mcpOperationReceipt = Notification.Name("mcpOperationReceipt")
+}
+
 @MainActor
 final class AppState: ObservableObject {
     static let shared = AppState()
@@ -10,10 +14,21 @@ final class AppState: ObservableObject {
     @Published var currentInput: String = ""
     @Published var isLoading: Bool = false
     @Published var currentSessionId: String?
+    @Published var messageMetadata: [Int64: MessageMetadata] = [:]
 
     // Projects
     @Published var projects: [ProjectRepository.ProjectSummary] = []
     @Published var selectedProjectId: Int64?
+    @Published var selectedProjectTodos: [Todo] = []
+    @Published var selectedProjectDeliverables: [Deliverable] = []
+    @Published var selectedTodoId: Int64?
+    @Published var selectedTodo: Todo?
+    @Published var selectedTodoDeliverables: [Deliverable] = []
+
+    // Today panel
+    @Published var showTodayPanel: Bool = true
+    @Published var todayEvents: [EventKitManager.CalendarEvent] = []
+    @Published var todayTodos: [Todo] = []
 
     // Setup
     @Published var hasCalendarAccess: Bool = false
@@ -30,18 +45,31 @@ final class AppState: ObservableObject {
     let blinkRepo: BlinkRepository
     let prefRepo: PreferenceRepository
 
+    // Pending receipts accumulated during a Claude call
+    private var pendingReceipts: [OperationReceiptData] = []
+    private var receiptObserver: AnyCancellable?
+
     private init() {
         let db = AppDatabase.shared
         self.projectRepo = ProjectRepository(db: db)
         self.messageRepo = MessageRepository(db: db)
         self.blinkRepo = BlinkRepository(db: db)
         self.prefRepo = PreferenceRepository(db: db)
+
+        receiptObserver = NotificationCenter.default.publisher(for: .mcpOperationReceipt)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] notification in
+                if let receipt = notification.object as? OperationReceiptData {
+                    self?.pendingReceipts.append(receipt)
+                }
+            }
     }
 
     func loadInitialData() {
         loadProjects()
         loadRecentMessages()
         checkPermissions()
+        Task { await loadTodayData() }
     }
 
     func loadProjects() {
@@ -69,10 +97,27 @@ final class AppState: ObservableObject {
         }
     }
 
+    func loadTodayData() async {
+        todayEvents = await EventKitManager.shared.getTodayEvents()
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: today)!
+        do {
+            let allOpen = try projectRepo.allOpenTodos()
+            todayTodos = allOpen.filter { todo in
+                guard let due = todo.dueDate else { return false }
+                return due >= today && due < tomorrow
+            }
+        } catch {
+            todayTodos = []
+        }
+    }
+
     func startNewConversation() {
         messages = []
         currentSessionId = nil
         currentInput = ""
+        messageMetadata = [:]
         Task { await ClaudeService.shared.startNewConversation() }
     }
 
@@ -82,6 +127,7 @@ final class AppState: ObservableObject {
 
         isLoading = true
         currentInput = ""
+        pendingReceipts = []
 
         // Save user message
         let userMsg = try? messageRepo.saveMessage(role: "user", content: trimmed, sessionId: currentSessionId)
@@ -89,10 +135,20 @@ final class AppState: ObservableObject {
 
         Task {
             do {
+                // Pre-fetch context for new conversations
+                var context: ChatContext?
+                if currentSessionId == nil {
+                    let events = await EventKitManager.shared.getTodayEvents()
+                    let summaries = (try? projectRepo.projectSummaries()) ?? []
+                    let todos = (try? projectRepo.allOpenTodos()) ?? []
+                    context = ChatContext(todayEvents: events, projects: summaries, openTodos: todos)
+                }
+
                 let response = try await ClaudeService.shared.sendMessage(
                     trimmed,
                     history: [],
-                    toolsEnabled: true
+                    toolsEnabled: true,
+                    context: context
                 )
 
                 // Save session ID
@@ -100,17 +156,36 @@ final class AppState: ObservableObject {
                     currentSessionId = sessionId
                 }
 
-                // Save assistant message
+                // Save assistant message with model info
                 let assistantMsg = try? messageRepo.saveMessage(
                     role: "assistant",
                     content: response.result,
                     sessionId: currentSessionId,
-                    costUsd: response.totalCostUsd
+                    costUsd: response.totalCostUsd,
+                    model: response.model
                 )
-                if let assistantMsg { messages.append(assistantMsg) }
+                if let assistantMsg {
+                    messages.append(assistantMsg)
+
+                    // Attach metadata
+                    var meta = MessageMetadata()
+                    meta.model = response.model
+                    meta.toolCallNames = response.toolCallNames ?? []
+
+                    // Attach any pending receipts as UI elements
+                    for receipt in pendingReceipts {
+                        meta.uiElements.append(.operationReceipt(receipt))
+                    }
+                    pendingReceipts = []
+
+                    if let msgId = assistantMsg.id {
+                        messageMetadata[msgId] = meta
+                    }
+                }
 
                 // Reload projects in case Claude created/modified them
                 loadProjects()
+                await loadTodayData()
             } catch {
                 let errorMsg = try? messageRepo.saveMessage(
                     role: "system",
@@ -121,6 +196,142 @@ final class AppState: ObservableObject {
             }
 
             isLoading = false
+        }
+    }
+
+    // MARK: - Project Detail
+
+    func loadProjectDetail(_ projectId: Int64) {
+        do {
+            selectedProjectTodos = try projectRepo.todosForProject(projectId)
+            selectedProjectDeliverables = try projectRepo.deliverablesForProject(projectId)
+        } catch {
+            selectedProjectTodos = []
+            selectedProjectDeliverables = []
+        }
+    }
+
+    // MARK: - Task Detail
+
+    func selectTodo(_ todoId: Int64?) {
+        selectedTodoId = todoId
+
+        guard let todoId else {
+            selectedTodo = nil
+            selectedTodoDeliverables = []
+            return
+        }
+
+        loadTodoDetail(todoId)
+    }
+
+    func loadTodoDetail(_ todoId: Int64) {
+        do {
+            guard let todo = try projectRepo.todo(id: todoId) else {
+                selectTodo(nil)
+                return
+            }
+
+            selectedTodo = todo
+            selectedTodoDeliverables = try projectRepo.deliverablesForTodo(todoId)
+            selectedProjectId = todo.projectId
+            if let projectId = todo.projectId {
+                loadProjectDetail(projectId)
+            } else {
+                selectedProjectTodos = []
+                selectedProjectDeliverables = []
+            }
+        } catch {
+            selectedTodo = nil
+            selectedTodoDeliverables = []
+        }
+    }
+
+    func quickAddTodo(title: String, priority: Int = 0, dueDate: Date? = nil) {
+        let projectId = selectedProjectId
+        do {
+            try projectRepo.createTodo(title: title, priority: priority, dueDate: dueDate, projectId: projectId)
+            loadProjects()
+            if let pid = projectId {
+                loadProjectDetail(pid)
+            }
+        } catch {
+            Log.database.error("Failed to create todo: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    func toggleTodoCompletion(_ todoId: Int64) {
+        do {
+            guard var todo = try projectRepo.todo(id: todoId) else { return }
+            todo.completed.toggle()
+            todo.completedAt = todo.completed ? Date() : nil
+            try projectRepo.updateTodo(todo)
+            loadProjects()
+            if let pid = selectedProjectId {
+                loadProjectDetail(pid)
+            }
+            if selectedTodoId == todoId {
+                loadTodoDetail(todoId)
+            }
+        } catch {
+            Log.database.error("Failed to toggle todo: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    // MARK: - Chat Actions
+
+    func handleChatAction(_ action: ChatAction) {
+        switch action {
+        case .confirmReceipt(let receiptId):
+            updateReceiptStatus(receiptId: receiptId, newStatus: .confirmed)
+
+        case .undoReceipt(let receiptId, let entityType, let entityId):
+            do {
+                switch entityType {
+                case "todo":
+                    try projectRepo.deleteTodo(id: entityId)
+                    if selectedTodoId == entityId {
+                        selectTodo(nil)
+                    }
+                case "project": try projectRepo.deleteProject(id: entityId)
+                default: break
+                }
+                updateReceiptStatus(receiptId: receiptId, newStatus: .undone)
+                loadProjects()
+            } catch {
+                Log.database.error("Failed to undo \(entityType): \(error.localizedDescription, privacy: .public)")
+            }
+
+        case .completeTodo(let todoId):
+            toggleTodoCompletion(todoId)
+
+        case .viewProject(let projectId):
+            selectedProjectId = projectId
+
+        case .viewTodosForProject(let projectId):
+            selectedProjectId = projectId
+
+        case .viewTodo(let todoId):
+            selectTodo(todoId)
+
+        case .dismissCard(let cardId):
+            for (msgId, var meta) in messageMetadata {
+                meta.uiElements.removeAll { $0.id == cardId }
+                messageMetadata[msgId] = meta
+            }
+        }
+    }
+
+    private func updateReceiptStatus(receiptId: String, newStatus: ReceiptStatus) {
+        for (msgId, var meta) in messageMetadata {
+            for i in meta.uiElements.indices {
+                if case .operationReceipt(var receipt) = meta.uiElements[i],
+                   receipt.id == receiptId {
+                    receipt.status = newStatus
+                    meta.uiElements[i] = .operationReceipt(receipt)
+                }
+            }
+            messageMetadata[msgId] = meta
         }
     }
 }

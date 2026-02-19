@@ -25,7 +25,7 @@ final class MainWindowController: ObservableObject {
             .environmentObject(appState)
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 700, height: 600),
+            contentRect: NSRect(x: 0, y: 0, width: 1160, height: 760),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
@@ -34,7 +34,7 @@ final class MainWindowController: ObservableObject {
         window.title = "Conductor"
         window.contentViewController = NSHostingController(rootView: contentView)
         window.setFrameAutosaveName("ConductorMainWindow")
-        window.minSize = NSSize(width: 500, height: 400)
+        window.minSize = NSSize(width: 900, height: 620)
 
         if !window.setFrameUsingName("ConductorMainWindow") {
             window.center()

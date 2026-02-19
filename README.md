@@ -1,171 +1,132 @@
 # Conductor
 
-Your AI-powered personal assistant - "Claude Code for Life"
+AI-powered personal productivity assistant for macOS. Uses [Claude Code](https://docs.anthropic.com/en/docs/claude-code) as its AI backbone.
 
-Conductor is a macOS menubar app that acts as your personal AI chief of staff, understanding your context (calendar, tasks, projects) and helping you manage your day.
+Conductor is a menubar app that manages your projects, tasks, and calendar through natural language chat. It runs Claude as a subprocess with MCP tools that give it read/write access to your local data.
 
 ## Features
 
-- **Chat Interface**: Natural language input with keyboard-first design
-- **Calendar Integration**: Reads your Apple Calendar to provide context-aware responses
-- **Reminders Integration**: Creates and manages Apple Reminders
-- **Proactive Notifications**: Meeting reminders, daily briefings (optional)
-- **Secure Storage**: API keys in Keychain, data encrypted with SQLCipher
-- **Global Hotkey**: Cmd+Shift+C to toggle the window
+- **Chat workspace** — Talk to Claude with full context of your calendar, projects, and TODOs
+- **Projects & TODOs** — Create and manage projects with tasks, priorities, and due dates
+- **Calendar integration** — Reads Apple Calendar; can create time blocks
+- **Blink Engine** — Background loop (every 15 min) that reviews your context and sends smart notifications or dispatches AI agents
+- **Agent dispatch** — Kick off background AI tasks on specific TODOs
+- **Reminders sync** — Reads Apple Reminders for additional context
+- **Voice input** — Speech-to-text for hands-free interaction
 
 ## Requirements
 
-- macOS 14.0 (Sonnet) or later
-- Xcode 15.0 or later
-- Claude API key from [Anthropic Console](https://console.anthropic.com/)
+- macOS 14.0 (Sonoma) or later
+- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
+- Calendar and Reminders permissions (prompted on first launch)
 
-## Installation
+## Install
 
-### Building from Source
+### Download (pre-built)
 
-1. Open the project in Xcode:
+1. Download `Conductor.zip` from the [latest release](../../releases/latest)
+2. Unzip and move `Conductor.app` to `/Applications`
+3. On first launch, bypass Gatekeeper (app is ad-hoc signed):
    ```bash
-   cd Conductor
-   open Package.swift
+   xattr -cr /Applications/Conductor.app
+   open /Applications/Conductor.app
    ```
+4. Grant Calendar, Reminders, and Notification permissions when prompted
 
-2. Build and run (Cmd+R)
+### Build from source
 
-3. Grant permissions when prompted:
-   - Accessibility (for global hotkey)
-   - Calendar access
-   - Reminders access
-   - Notifications
+```bash
+git clone https://github.com/philippe-eecs/conductor.git
+cd conductor/Conductor
 
-4. Click the brain icon in the menubar and add your API key in Settings
+# Development (debug build, launches immediately)
+scripts/dev-run-app.sh
 
-### Creating an App Bundle
-
-To create a proper `.app` bundle, use Xcode:
-
-1. File → New → Project → macOS → App
-2. Copy the `Sources` directory contents into the new project
-3. Add dependencies via File → Add Package Dependencies:
-   - `https://github.com/evgenyneu/keychain-swift.git`
-   - `https://github.com/stephencelis/SQLite.swift.git`
-4. Build for release (Product → Archive)
+# Release (universal binary, zipped .app)
+scripts/build-release-app.sh
+# Output: .build/release-app/Conductor.zip
+```
 
 ## Usage
 
-### Quick Start
+Conductor lives in your menubar. Click the icon or use the keyboard to open the main window.
 
-1. Press **Cmd+Shift+C** to open Conductor
-2. Ask questions like:
-   - "What's on my calendar today?"
-   - "Remind me to call mom Sunday at 10am"
-   - "Help me plan my week"
-   - "Block 2 hours tomorrow for deep work"
+**Chat** — Ask anything. Claude has MCP tools to read/write your data:
+- "What's on my calendar today?"
+- "Create a project called Video ViTok"
+- "Add 3 research TODOs to that project with high priority"
+- "Help me plan my afternoon around my meetings"
 
-### Suggested Prompts
+**Keyboard shortcuts:**
+| Shortcut | Action |
+|----------|--------|
+| Cmd+N | New conversation |
+| Cmd+E | Toggle chat panel |
+| Cmd+T | Toggle Today panel |
+| Cmd+, | Settings |
+| Esc | Dismiss panels |
 
-- **Daily briefing**: "What's my day look like?"
-- **Quick capture**: "Remind me to X" / "Add task Y to project Z"
-- **Context search**: "What do I know about [topic]?"
-- **Time blocking**: "Block time for [activity] tomorrow"
+**Blink Engine** — Runs automatically in the background. Reviews your calendar, open TODOs, and context every 15 minutes (configurable). Decisions:
+- **Silent** (default) — nothing happening
+- **Notify** — sends a macOS notification for urgent items (meeting in 10 min, overdue task)
+- **Agent** — dispatches a background Claude session to work on a specific TODO
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    CONDUCTOR MENUBAR APP                         │
-├─────────────────────────────────────────────────────────────────┤
-│  Chat Interface → Context Layer → AI Service → Proactive Engine │
-│                                                                  │
-│  Security: Keychain (API keys) + SQLite (encrypted data)        │
-└─────────────────────────────────────────────────────────────────┘
+Conductor.app
+├── Chat (Claude CLI subprocess with --resume for session continuity)
+│   ├── Pre-fetched context: calendar, projects, TODOs
+│   └── 9 MCP tools: get/create/update projects, TODOs, calendar, agents
+│
+├── Blink Engine (background timer, every 15 min)
+│   ├── Gathers: calendar, TODOs, running agents, emails, recent blinks
+│   ├── One-shot Claude call → JSON decision
+│   └── Routes: silent | notify | dispatch agent
+│
+├── Agent Dispatcher (fresh Claude session per task)
+│   ├── Context from specific TODO's project + deliverables
+│   └── Records results + cost in database
+│
+├── MCP Server (in-process, Network.framework on 127.0.0.1)
+│   └── Bridges Claude CLI ↔ app database + EventKit
+│
+└── Data (GRDB/SQLite)
+    └── Projects, TODOs, Deliverables, Messages, BlinkLogs, AgentRuns
 ```
 
-### Key Components
-
-| Component | Description |
-|-----------|-------------|
-| `ConductorApp.swift` | Main app entry, MenuBarExtra setup |
-| `ConductorView.swift` | Chat interface |
-| `ClaudeService.swift` | Claude API integration |
-| `EventKitManager.swift` | Calendar/Reminders access |
-| `KeychainManager.swift` | Secure API key storage |
-| `Database.swift` | SQLite conversation/notes storage |
-| `ProactiveEngine.swift` | Background checks and notifications |
-
-## Configuration
-
-### API Keys
-
-API keys are stored securely in the macOS Keychain. Access Settings from the gear icon in the menubar.
-
-- **Claude API Key** (required): Powers the AI assistant
-- **Gemini API Key** (optional): For future multimodal features
-
-### Permissions
-
-Conductor requests permissions on first use:
-
-| Permission | Purpose |
-|------------|---------|
-| Accessibility | Global hotkey (Cmd+Shift+C) |
-| Calendar | Read your schedule for context |
-| Reminders | Create and read reminders |
-| Notifications | Proactive alerts and briefings |
-
-## Privacy
-
-- All data stored locally on your Mac
-- API keys never leave the Keychain
-- Conversation history stored in encrypted SQLite
-- Calendar/Reminder data accessed via native EventKit (not copied)
-
 ## Development
-
-### Project Structure
 
 ```
 Conductor/
 ├── Sources/
-│   ├── App/           # App lifecycle, main entry
-│   ├── UI/            # SwiftUI views
-│   ├── Security/      # Keychain, encryption
-│   ├── Data/          # SQLite database
-│   ├── Context/       # EventKit, context building
-│   ├── Proactive/     # Background engine, notifications
-│   ├── AI/            # Claude/Gemini API services
-│   └── Tools/         # External tool integrations
+│   ├── AI/            # ClaudeService, BlinkEngine, BlinkPromptBuilder
+│   ├── Agent/         # AgentDispatcher
+│   ├── App/           # AppDelegate, entry point
+│   ├── Context/       # EventKitManager
+│   ├── Data/          # AppDatabase, Models, Repositories
+│   ├── MCP/           # MCPServer, MCPTools
+│   └── UI/            # SwiftUI views
+├── Tests/
+├── scripts/
+│   ├── dev-run-app.sh          # Debug build + launch
+│   └── build-release-app.sh    # Release universal binary
 └── Package.swift
 ```
 
-### Building
+### Running tests
 
 ```bash
-# Build with Swift Package Manager (requires Xcode)
 cd Conductor
-swift build
-
-# Or open in Xcode
-open Package.swift
+swift test
 ```
 
-### Testing
+## Privacy
 
-Run the app and verify:
-1. Menubar icon appears
-2. Cmd+Shift+C toggles window
-3. Can enter API key in Settings
-4. Chat works with Claude
-5. Calendar context is included
-
-## Roadmap
-
-- [x] MVP v0.1: Chat + API integration
-- [ ] MVP v0.2: Calendar context
-- [ ] MVP v0.3: Quick actions (reminders, calendar events)
-- [ ] MVP v0.4: Persistence and memory
-- [ ] Proactive notifications
-- [ ] Obsidian vault integration
-- [ ] Orchestra multi-agent workflows
+- All data stored locally in `~/Library/Application Support/Conductor/`
+- Claude CLI runs as a local subprocess — no direct API calls from the app
+- Calendar/Reminders accessed via native EventKit (data stays on device)
+- No telemetry, no analytics, no network calls except Claude CLI
 
 ## License
 

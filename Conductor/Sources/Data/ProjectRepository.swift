@@ -42,6 +42,12 @@ struct ProjectRepository {
         }
     }
 
+    func deleteProject(id: Int64) throws {
+        try db.dbQueue.write { db in
+            _ = try Project.deleteOne(db, key: id)
+        }
+    }
+
     func archiveProject(id: Int64) throws {
         try db.dbQueue.write { db in
             try db.execute(
@@ -115,6 +121,12 @@ struct ProjectRepository {
                 sql: "UPDATE todos SET completed = 1, completedAt = ?, updatedAt = ? WHERE id = ?",
                 arguments: [now, now, id]
             )
+        }
+    }
+
+    func deleteTodo(id: Int64) throws {
+        try db.dbQueue.write { db in
+            _ = try Todo.deleteOne(db, key: id)
         }
     }
 

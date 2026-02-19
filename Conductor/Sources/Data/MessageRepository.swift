@@ -5,10 +5,10 @@ struct MessageRepository {
     let db: AppDatabase
 
     @discardableResult
-    func saveMessage(role: String, content: String, sessionId: String?, costUsd: Double? = nil) throws -> Message {
+    func saveMessage(role: String, content: String, sessionId: String?, costUsd: Double? = nil, model: String? = nil) throws -> Message {
         let message = Message(
             role: role, content: content, sessionId: sessionId,
-            costUsd: costUsd, createdAt: Date()
+            costUsd: costUsd, model: model, createdAt: Date()
         )
         return try db.dbQueue.write { db in
             try message.inserted(db)

@@ -112,6 +112,12 @@ final class AppDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v2_message_model") { db in
+            try db.alter(table: "messages") { t in
+                t.add(column: "model", .text)
+            }
+        }
+
         try migrator.migrate(dbQueue)
     }
 }
