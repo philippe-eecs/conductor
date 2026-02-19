@@ -25,10 +25,15 @@ final class AppState: ObservableObject {
     @Published var selectedTodo: Todo?
     @Published var selectedTodoDeliverables: [Deliverable] = []
 
-    // Today panel
-    @Published var showTodayPanel: Bool = true
+    // Today data
     @Published var todayEvents: [EventKitManager.CalendarEvent] = []
     @Published var todayTodos: [Todo] = []
+    @Published var openTodos: [Todo] = []
+
+    // Workspace routing
+    @Published var primarySurface: WorkspaceSurface = .dashboard
+    @Published var secondarySurface: WorkspaceSurface? = .calendar
+    @Published var detachedSurfaces: Set<WorkspaceSurface> = []
 
     // Setup
     @Published var hasCalendarAccess: Bool = false
@@ -49,6 +54,12 @@ final class AppState: ObservableObject {
     private var pendingReceipts: [OperationReceiptData] = []
     private var receiptObserver: AnyCancellable?
 
+    private enum PrefKey {
+        static let workspacePrimary = "workspace.primarySurface"
+        static let workspaceSecondary = "workspace.secondarySurface"
+        static let workspaceDetached = "workspace.detachedSurfaces"
+    }
+
     private init() {
         let db = AppDatabase.shared
         self.projectRepo = ProjectRepository(db: db)
@@ -66,8 +77,15 @@ final class AppState: ObservableObject {
     }
 
     func loadInitialData() {
+        loadWorkspaceLayout()
+        primarySurface = .dashboard
+        detachedSurfaces.remove(.dashboard)
+        if secondarySurface == nil {
+            secondarySurface = .calendar
+        }
         loadProjects()
         loadRecentMessages()
+        loadOpenTodos()
         checkPermissions()
         Task { await loadTodayData() }
     }
@@ -99,18 +117,160 @@ final class AppState: ObservableObject {
 
     func loadTodayData() async {
         todayEvents = await EventKitManager.shared.getTodayEvents()
+        loadOpenTodos()
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
         let tomorrow = calendar.date(byAdding: .day, value: 1, to: today)!
-        do {
-            let allOpen = try projectRepo.allOpenTodos()
-            todayTodos = allOpen.filter { todo in
-                guard let due = todo.dueDate else { return false }
-                return due >= today && due < tomorrow
-            }
-        } catch {
-            todayTodos = []
+        todayTodos = openTodos.filter { todo in
+            guard let due = todo.dueDate else { return false }
+            return due >= today && due < tomorrow
         }
+    }
+
+    func loadOpenTodos() {
+        do {
+            openTodos = try projectRepo.allOpenTodos()
+        } catch {
+            openTodos = []
+        }
+    }
+
+    // MARK: - Workspace Layout
+
+    func loadWorkspaceLayout() {
+        if let raw = try? prefRepo.get(PrefKey.workspacePrimary),
+           let surface = WorkspaceSurface(rawValue: raw) {
+            primarySurface = surface
+        }
+
+        if let raw = try? prefRepo.get(PrefKey.workspaceSecondary),
+           !raw.isEmpty,
+           let surface = WorkspaceSurface(rawValue: raw),
+           surface != primarySurface {
+            secondarySurface = surface
+        } else {
+            secondarySurface = nil
+        }
+
+        if let raw = try? prefRepo.get(PrefKey.workspaceDetached),
+           !raw.isEmpty {
+            detachedSurfaces = Set(
+                raw
+                    .split(separator: ",")
+                    .compactMap { WorkspaceSurface(rawValue: String($0)) }
+            )
+        } else {
+            detachedSurfaces = []
+        }
+
+        detachedSurfaces.remove(primarySurface)
+        if let secondary = secondarySurface, detachedSurfaces.contains(secondary) {
+            secondarySurface = nil
+        }
+
+        ensureValidWorkspace()
+    }
+
+    func openSurface(_ surface: WorkspaceSurface, in target: WorkspaceDockTarget = .primary) {
+        if detachedSurfaces.remove(surface) != nil {
+            MainWindowController.shared.closeDetachedSurfaceWindow(for: surface)
+        }
+
+        switch target {
+        case .primary:
+            if secondarySurface == surface {
+                secondarySurface = nil
+            }
+            primarySurface = surface
+        case .secondary:
+            if primarySurface == surface {
+                return
+            }
+            secondarySurface = surface
+        }
+
+        persistWorkspaceLayout()
+    }
+
+    func toggleSecondaryPane(default surface: WorkspaceSurface = .calendar) {
+        if secondarySurface != nil {
+            secondarySurface = nil
+        } else {
+            secondarySurface = primarySurface == surface ? .tasks : surface
+        }
+        ensureValidWorkspace()
+        persistWorkspaceLayout()
+    }
+
+    func clearSecondaryPane() {
+        secondarySurface = nil
+        persistWorkspaceLayout()
+    }
+
+    func detachSurface(_ surface: WorkspaceSurface) {
+        if detachedSurfaces.contains(surface) {
+            MainWindowController.shared.showDetachedSurfaceWindow(for: surface, appState: self)
+            return
+        }
+
+        if primarySurface == surface {
+            if let secondary = secondarySurface, secondary != surface {
+                primarySurface = secondary
+                secondarySurface = nil
+            } else {
+                primarySurface = fallbackPrimarySurface(excluding: [surface])
+            }
+        }
+        if secondarySurface == surface {
+            secondarySurface = nil
+        }
+
+        detachedSurfaces.insert(surface)
+        ensureValidWorkspace()
+        persistWorkspaceLayout()
+        MainWindowController.shared.showDetachedSurfaceWindow(for: surface, appState: self)
+    }
+
+    func redockSurface(_ surface: WorkspaceSurface, to target: WorkspaceDockTarget) {
+        if detachedSurfaces.remove(surface) != nil {
+            MainWindowController.shared.closeDetachedSurfaceWindow(for: surface)
+        }
+        openSurface(surface, in: target)
+    }
+
+    func handleDetachedWindowClosed(_ surface: WorkspaceSurface) {
+        detachedSurfaces.remove(surface)
+        ensureValidWorkspace()
+        persistWorkspaceLayout()
+    }
+
+    func isSurfaceDetached(_ surface: WorkspaceSurface) -> Bool {
+        detachedSurfaces.contains(surface)
+    }
+
+    private func ensureValidWorkspace() {
+        if detachedSurfaces.contains(primarySurface) {
+            detachedSurfaces.remove(primarySurface)
+        }
+        if let secondary = secondarySurface {
+            if secondary == primarySurface || detachedSurfaces.contains(secondary) {
+                secondarySurface = nil
+            }
+        }
+    }
+
+    private func fallbackPrimarySurface(excluding excluded: Set<WorkspaceSurface>) -> WorkspaceSurface {
+        for surface in WorkspaceSurface.navigationOrder where !excluded.contains(surface) && !detachedSurfaces.contains(surface) {
+            return surface
+        }
+        return .dashboard
+    }
+
+    private func persistWorkspaceLayout() {
+        try? prefRepo.set(PrefKey.workspacePrimary, value: primarySurface.rawValue)
+        try? prefRepo.set(PrefKey.workspaceSecondary, value: secondarySurface?.rawValue ?? "")
+        let detached = detachedSurfaces.map(\.rawValue).sorted().joined(separator: ",")
+        try? prefRepo.set(PrefKey.workspaceDetached, value: detached)
     }
 
     func startNewConversation() {
@@ -252,9 +412,11 @@ final class AppState: ObservableObject {
         do {
             try projectRepo.createTodo(title: title, priority: priority, dueDate: dueDate, projectId: projectId)
             loadProjects()
+            loadOpenTodos()
             if let pid = projectId {
                 loadProjectDetail(pid)
             }
+            Task { await loadTodayData() }
         } catch {
             Log.database.error("Failed to create todo: \(error.localizedDescription, privacy: .public)")
         }
@@ -267,12 +429,14 @@ final class AppState: ObservableObject {
             todo.completedAt = todo.completed ? Date() : nil
             try projectRepo.updateTodo(todo)
             loadProjects()
+            loadOpenTodos()
             if let pid = selectedProjectId {
                 loadProjectDetail(pid)
             }
             if selectedTodoId == todoId {
                 loadTodoDetail(todoId)
             }
+            Task { await loadTodayData() }
         } catch {
             Log.database.error("Failed to toggle todo: \(error.localizedDescription, privacy: .public)")
         }
@@ -298,6 +462,8 @@ final class AppState: ObservableObject {
                 }
                 updateReceiptStatus(receiptId: receiptId, newStatus: .undone)
                 loadProjects()
+                loadOpenTodos()
+                Task { await loadTodayData() }
             } catch {
                 Log.database.error("Failed to undo \(entityType): \(error.localizedDescription, privacy: .public)")
             }
@@ -307,12 +473,21 @@ final class AppState: ObservableObject {
 
         case .viewProject(let projectId):
             selectedProjectId = projectId
+            loadProjectDetail(projectId)
+            openSurface(.projects)
 
         case .viewTodosForProject(let projectId):
             selectedProjectId = projectId
+            loadProjectDetail(projectId)
+            openSurface(.projects)
 
         case .viewTodo(let todoId):
             selectTodo(todoId)
+            if secondarySurface == nil {
+                openSurface(.tasks, in: .secondary)
+            } else {
+                openSurface(.tasks)
+            }
 
         case .dismissCard(let cardId):
             for (msgId, var meta) in messageMetadata {

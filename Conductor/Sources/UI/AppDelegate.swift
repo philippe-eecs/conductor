@@ -31,6 +31,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Load initial data and show window
         AppState.shared.loadInitialData()
         MainWindowController.shared.showWindow(appState: AppState.shared)
+        MainWindowController.shared.restoreDetachedWindows(appState: AppState.shared)
     }
 
     func applicationWillTerminate(_ notification: Notification) {

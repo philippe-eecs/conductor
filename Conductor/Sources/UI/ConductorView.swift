@@ -1,15 +1,7 @@
 import SwiftUI
 
-private enum InspectorTab: String, CaseIterable {
-    case today = "Today"
-    case project = "Project"
-    case task = "Task"
-}
-
 struct ConductorView: View {
     @EnvironmentObject var appState: AppState
-    @State private var inspectorTab: InspectorTab = .today
-    @State private var showChat: Bool = true
 
     var body: some View {
         Group {
@@ -19,144 +11,88 @@ struct ConductorView: View {
                 workspaceShell
             }
         }
-        .frame(minWidth: 900, minHeight: 620)
+        .frame(minWidth: 980, minHeight: 660)
         .background(Color(nsColor: .windowBackgroundColor))
         .overlay { keyboardShortcuts }
         .sheet(isPresented: $appState.showSettings) {
             SettingsView()
                 .frame(width: 420, height: 400)
         }
-        .onChange(of: appState.selectedProjectId) { _, selected in
-            if selected != nil {
-                if appState.selectedTodoId == nil {
-                    inspectorTab = .project
-                }
-            } else {
-                ensureInspectorTabIsAvailable()
-            }
-        }
-        .onChange(of: appState.selectedTodoId) { _, selected in
-            if selected != nil {
-                inspectorTab = .task
-            } else {
-                ensureInspectorTabIsAvailable()
-            }
-        }
-        .onChange(of: appState.showTodayPanel) { _, visible in
-            if visible, appState.selectedProjectId == nil, appState.selectedTodoId == nil {
-                inspectorTab = .today
-            }
-            ensureInspectorTabIsAvailable()
-        }
     }
 
     private var workspaceShell: some View {
         VStack(spacing: 0) {
-            workspaceHeader
+            topBar
             Divider()
-            workspaceContent
-        }
-    }
-
-    @ViewBuilder
-    private var workspaceContent: some View {
-        if showChat {
             HSplitView {
-                ProjectListView()
-                    .frame(minWidth: 220, idealWidth: 250, maxWidth: 300)
+                WorkspaceSidebarView()
+                    .frame(minWidth: 230, idealWidth: 260, maxWidth: 300)
 
-                chatPane
-                    .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
+                WorkspacePaneView(
+                    surface: appState.primarySurface,
+                    role: .primary,
+                    isDetached: false,
+                    showsCloseButton: false
+                )
+                .frame(minWidth: 460, maxWidth: .infinity, maxHeight: .infinity)
 
-                if showsInspectorPanel {
-                    inspectorPanel
-                        .frame(minWidth: 320, idealWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
-                        .layoutPriority(1)
+                if let secondary = appState.secondarySurface {
+                    WorkspacePaneView(
+                        surface: secondary,
+                        role: .secondary,
+                        isDetached: false,
+                        showsCloseButton: true
+                    )
+                    .frame(minWidth: 360, idealWidth: 440, maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
-            .id("workspace-with-chat")
-        } else {
-            HStack(spacing: 0) {
-                ProjectListView()
-                    .frame(minWidth: 200, idealWidth: 220, maxWidth: 260, maxHeight: .infinity)
-
-                Divider()
-
-                if showsInspectorPanel {
-                    inspectorPanel
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .layoutPriority(1)
-                } else {
-                    Color(nsColor: .controlBackgroundColor)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-            }
-            .id("workspace-inspector-only")
         }
     }
 
-    private var chatPane: some View {
-        VStack(spacing: 0) {
-            ChatView()
-            InputBar()
-        }
-    }
-
-    private var workspaceHeader: some View {
+    private var topBar: some View {
         HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(workspaceTitle)
-                    .font(.headline)
-                Text(workspaceSubtitle)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+            Text("Conductor")
+                .font(.headline)
+
+            ForEach(WorkspaceSurface.navigationOrder) { surface in
+                toolbarSurfaceButton(surface)
             }
 
             Spacer()
 
-            if appState.currentSessionId != nil {
-                Text("Live Session")
-                    .font(.caption2.weight(.medium))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color.accentColor.opacity(0.14))
-                    .foregroundColor(.accentColor)
-                    .clipShape(Capsule())
-            }
-
-            Button {
-                appState.showTodayPanel.toggle()
-                if appState.showTodayPanel {
-                    inspectorTab = .today
-                }
-            } label: {
-                Label("Today", systemImage: appState.showTodayPanel ? "calendar.circle.fill" : "calendar.circle")
-                    .labelStyle(.iconOnly)
-            }
-            .buttonStyle(.plain)
-            .help("Toggle Today Panel")
-
-            Button {
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    showChat.toggle()
-                    if !showChat && !showsInspectorPanel {
-                        appState.showTodayPanel = true
-                        inspectorTab = .today
+            if let secondary = appState.secondarySurface {
+                Menu {
+                    ForEach(WorkspaceSurface.navigationOrder) { surface in
+                        Button {
+                            appState.openSurface(surface, in: .secondary)
+                        } label: {
+                            Label(surface.title, systemImage: surface.icon)
+                        }
                     }
+                    Divider()
+                    Button("Close Right Pane") {
+                        appState.clearSecondaryPane()
+                    }
+                } label: {
+                    Label("Right: \(secondary.title)", systemImage: "rectangle.split.2x1")
                 }
-            } label: {
-                Image(systemName: showChat ? "bubble.left.fill" : "bubble.left")
+                .menuStyle(.borderlessButton)
+            } else {
+                Button {
+                    appState.toggleSecondaryPane(default: .calendar)
+                } label: {
+                    Label("Open Right Pane", systemImage: "rectangle.split.2x1")
+                }
+                .buttonStyle(.borderless)
             }
-            .buttonStyle(.plain)
-            .help(showChat ? "Hide Chat" : "Show Chat")
 
             Button {
                 appState.startNewConversation()
+                appState.openSurface(.chat, in: .primary)
             } label: {
-                Image(systemName: "square.and.pencil")
+                Label("New Chat", systemImage: "square.and.pencil")
             }
-            .buttonStyle(.plain)
-            .help("New Conversation")
+            .buttonStyle(.borderless)
 
             Button {
                 appState.showSettings = true
@@ -166,196 +102,52 @@ struct ConductorView: View {
             .buttonStyle(.plain)
             .help("Settings")
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
         .background(Color(nsColor: .underPageBackgroundColor))
     }
 
-    private var inspectorPanel: some View {
-        VStack(spacing: 0) {
-            inspectorHeader
-            Divider()
-            inspectorBody
+    private func toolbarSurfaceButton(_ surface: WorkspaceSurface) -> some View {
+        let isSelected = appState.primarySurface == surface
+        return Button {
+            appState.openSurface(surface, in: .primary)
+        } label: {
+            Label(surface.title, systemImage: surface.icon)
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(isSelected ? Color.accentColor.opacity(0.16) : Color.clear)
+                .clipShape(Capsule())
         }
-        .background(Color(nsColor: .controlBackgroundColor))
-    }
-
-    private var inspectorHeader: some View {
-        HStack(spacing: 8) {
-            if availableInspectorTabs.count > 1 {
-                Picker("Inspector", selection: $inspectorTab) {
-                    ForEach(availableInspectorTabs, id: \.self) { tab in
-                        Text(tab.rawValue).tag(tab)
-                    }
-                }
-                .pickerStyle(.segmented)
-            } else {
-                Label(inspectorTitle, systemImage: inspectorIcon)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(.secondary)
-                Spacer()
-            }
-
-            if closeButtonAction != nil {
-                Button {
-                    closeButtonAction?()
-                } label: {
-                    Image(systemName: "xmark.circle")
-                        .foregroundColor(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help(closeButtonTitle)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-    }
-
-    @ViewBuilder
-    private var inspectorBody: some View {
-        if activeInspectorTab == .today {
-            TodayPanelView()
-        } else if activeInspectorTab == .project, let projectId = appState.selectedProjectId {
-            ProjectDetailView(projectId: projectId)
-        } else if activeInspectorTab == .task, let todoId = appState.selectedTodoId {
-            TaskDetailView(todoId: todoId)
-        } else {
-            VStack(spacing: 10) {
-                Image(systemName: "calendar.badge.exclamationmark")
-                    .font(.title2)
-                    .foregroundColor(.secondary)
-                Text("No inspector content")
-                    .font(.callout)
-                    .foregroundColor(.secondary)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-    }
-
-    private var selectedProjectName: String? {
-        guard let selectedId = appState.selectedProjectId else { return nil }
-        return appState.projects.first(where: { $0.project.id == selectedId })?.project.name
-    }
-
-    private var showsInspectorPanel: Bool {
-        !availableInspectorTabs.isEmpty
-    }
-
-    private var inspectorTitle: String {
-        switch activeInspectorTab {
-        case .today: return "Today"
-        case .project: return "Project"
-        case .task: return "Task"
-        }
-    }
-
-    private var workspaceTitle: String {
-        if let todo = appState.selectedTodo {
-            return todo.title
-        }
-        return selectedProjectName ?? "Conductor"
-    }
-
-    private var workspaceSubtitle: String {
-        if appState.selectedTodoId != nil {
-            return "Task workspace"
-        }
-        if selectedProjectName != nil {
-            return "Project workspace"
-        }
-        if showChat {
-            return "Chat workspace"
-        }
-        return "Calendar workspace"
-    }
-
-    private var availableInspectorTabs: [InspectorTab] {
-        var tabs: [InspectorTab] = []
-        if appState.showTodayPanel { tabs.append(.today) }
-        if appState.selectedProjectId != nil { tabs.append(.project) }
-        if appState.selectedTodoId != nil { tabs.append(.task) }
-        return tabs
-    }
-
-    private var activeInspectorTab: InspectorTab {
-        if availableInspectorTabs.contains(inspectorTab) {
-            return inspectorTab
-        }
-        return availableInspectorTabs.first ?? .today
-    }
-
-    private var closeButtonTitle: String {
-        switch activeInspectorTab {
-        case .today: return "Hide Today Panel"
-        case .project: return "Hide Project Panel"
-        case .task: return "Hide Task Panel"
-        }
-    }
-
-    private var closeButtonAction: (() -> Void)? {
-        switch activeInspectorTab {
-        case .today:
-            guard appState.showTodayPanel else { return nil }
-            return {
-                appState.showTodayPanel = false
-                ensureInspectorTabIsAvailable()
-            }
-        case .project:
-            guard appState.selectedProjectId != nil else { return nil }
-            return {
-                appState.selectedProjectId = nil
-                ensureInspectorTabIsAvailable()
-            }
-        case .task:
-            guard appState.selectedTodoId != nil else { return nil }
-            return {
-                appState.selectTodo(nil)
-                ensureInspectorTabIsAvailable()
-            }
-        }
-    }
-
-    private func ensureInspectorTabIsAvailable() {
-        if !availableInspectorTabs.contains(inspectorTab), let fallback = availableInspectorTabs.first {
-            inspectorTab = fallback
-        }
-        if !showChat && availableInspectorTabs.isEmpty {
-            appState.showTodayPanel = true
-            inspectorTab = .today
-        }
-    }
-
-    private var inspectorIcon: String {
-        switch activeInspectorTab {
-        case .today: return "calendar"
-        case .project: return "checklist"
-        case .task: return "list.bullet.rectangle"
-        }
+        .buttonStyle(.plain)
+        .help("Open \(surface.title) in left pane")
     }
 
     private var keyboardShortcuts: some View {
         Group {
-            Button("") { appState.startNewConversation() }
-                .keyboardShortcut("n", modifiers: .command)
+            Button("") { appState.openSurface(.dashboard) }
+                .keyboardShortcut("1", modifiers: .command)
+
+            Button("") { appState.openSurface(.calendar) }
+                .keyboardShortcut("2", modifiers: .command)
+
+            Button("") { appState.openSurface(.tasks) }
+                .keyboardShortcut("3", modifiers: .command)
+
+            Button("") { appState.openSurface(.chat) }
+                .keyboardShortcut("4", modifiers: .command)
+
+            Button("") { appState.openSurface(.projects) }
+                .keyboardShortcut("5", modifiers: .command)
+
+            Button("") { appState.toggleSecondaryPane(default: .calendar) }
+                .keyboardShortcut("\\", modifiers: .command)
 
             Button("") {
-                appState.showTodayPanel.toggle()
-                if appState.showTodayPanel {
-                    inspectorTab = .today
-                }
+                appState.startNewConversation()
+                appState.openSurface(.chat, in: .primary)
             }
-            .keyboardShortcut("t", modifiers: .command)
-
-            Button("") {
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    showChat.toggle()
-                    if !showChat && !showsInspectorPanel {
-                        appState.showTodayPanel = true
-                        inspectorTab = .today
-                    }
-                }
-            }
-            .keyboardShortcut("e", modifiers: .command)
+            .keyboardShortcut("n", modifiers: .command)
 
             Button("") { appState.showSettings = true }
                 .keyboardShortcut(",", modifiers: .command)
@@ -375,19 +167,11 @@ struct ConductorView: View {
 
         if appState.selectedTodoId != nil {
             appState.selectTodo(nil)
-            ensureInspectorTabIsAvailable()
             return
         }
 
         if appState.selectedProjectId != nil {
             appState.selectedProjectId = nil
-            ensureInspectorTabIsAvailable()
-            return
-        }
-
-        if appState.showTodayPanel {
-            appState.showTodayPanel = false
-            ensureInspectorTabIsAvailable()
         }
     }
 }
