@@ -42,7 +42,7 @@ final class NotificationManager: NSObject {
         UNUserNotificationCenter.current().setNotificationCategories([blinkCategory])
     }
 
-    func sendNotification(title: String, body: String) async {
+    func sendNotification(title: String, body: String, suggestedPrompt: String? = nil) async {
         guard RuntimeEnvironment.supportsUserNotifications else { return }
 
         let content = UNMutableNotificationContent()
@@ -50,6 +50,9 @@ final class NotificationManager: NSObject {
         content.body = body
         content.sound = .default
         content.categoryIdentifier = Self.blinkCategory
+        if let suggestedPrompt, !suggestedPrompt.isEmpty {
+            content.userInfo["prompt"] = suggestedPrompt
+        }
 
         let request = UNNotificationRequest(
             identifier: UUID().uuidString,
@@ -76,6 +79,10 @@ extension NotificationManager: UNUserNotificationCenterDelegate {
         case Self.respondAction, UNNotificationDefaultActionIdentifier:
             DispatchQueue.main.async {
                 MainWindowController.shared.showWindow(appState: AppState.shared)
+                if let prompt = response.notification.request.content.userInfo["prompt"] as? String,
+                   !prompt.isEmpty {
+                    NotificationCenter.default.post(name: .openConductorWithPrompt, object: prompt)
+                }
             }
         default:
             break

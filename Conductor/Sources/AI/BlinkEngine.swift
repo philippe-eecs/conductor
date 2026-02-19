@@ -66,6 +66,7 @@ actor BlinkEngine {
         let runningAgents = (try? blinkRepo.runningAgentRuns()) ?? []
         let recentBlinks = (try? blinkRepo.recentBlinks(limit: 3)) ?? []
         let unreadEmails = await MailService.shared.getUnreadCount()
+        let recentEmails = await MailService.shared.getRecentEmails(hoursBack: 12)
 
         // Build prompt
         let prompt = BlinkPromptBuilder.build(
@@ -73,7 +74,8 @@ actor BlinkEngine {
             openTodos: openTodos,
             runningAgents: runningAgents,
             recentBlinks: recentBlinks,
-            unreadEmailCount: unreadEmails
+            unreadEmailCount: unreadEmails,
+            recentEmails: recentEmails
         )
 
         do {
@@ -103,7 +105,11 @@ actor BlinkEngine {
             case .notify:
                 if let title = decision.notificationTitle, let body = decision.notificationBody {
                     Log.blink.info("Blink: notify — \(title, privacy: .public)")
-                    await NotificationManager.shared.sendNotification(title: title, body: body)
+                    await NotificationManager.shared.sendNotification(
+                        title: title,
+                        body: body,
+                        suggestedPrompt: decision.suggestedPrompt
+                    )
                 }
 
             case .agent:
@@ -138,6 +144,7 @@ actor BlinkEngine {
         let decision: BlinkDecision
         let notificationTitle: String?
         let notificationBody: String?
+        let suggestedPrompt: String?
         let agentTodoId: Int64?
         let agentPrompt: String?
         let reasoning: String?
@@ -168,6 +175,7 @@ actor BlinkEngine {
             decision: .silent,
             notificationTitle: nil,
             notificationBody: nil,
+            suggestedPrompt: nil,
             agentTodoId: nil,
             agentPrompt: nil,
             reasoning: "Parse failure: \(cleaned.prefix(200))"
@@ -187,6 +195,7 @@ actor BlinkEngine {
             decision: decision,
             notificationTitle: json["notification_title"] as? String,
             notificationBody: json["notification_body"] as? String,
+            suggestedPrompt: json["suggested_prompt"] as? String,
             agentTodoId: json["agent_todo_id"] as? Int64,
             agentPrompt: json["agent_prompt"] as? String,
             reasoning: json["reasoning"] as? String

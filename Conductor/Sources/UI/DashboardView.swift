@@ -72,7 +72,7 @@ struct DashboardView: View {
             .controlSize(.small)
 
             Button {
-                appState.openSurface(.tasks, in: .secondary)
+                appState.openSurface(.tasks, in: .primary)
             } label: {
                 Label("Review Tasks", systemImage: "checklist")
             }
@@ -80,7 +80,7 @@ struct DashboardView: View {
             .controlSize(.small)
 
             Button {
-                appState.openSurface(.chat, in: .secondary)
+                appState.openSurface(.chat, in: .primary)
             } label: {
                 Label("Plan with Chat", systemImage: "bubble.left.and.bubble.right")
             }
@@ -245,7 +245,7 @@ struct DashboardView: View {
                         onToggle: { appState.toggleTodoCompletion(todo.id!) },
                         onSelect: {
                             appState.selectTodo(todo.id)
-                            appState.openSurface(.tasks, in: .secondary)
+                            appState.openSurface(.tasks, in: .primary)
                         },
                         isSelected: appState.selectedTodoId == todo.id
                     )

@@ -1,9 +1,16 @@
+import AppKit
 import Foundation
 
 final class MailService {
     static let shared = MailService()
 
     private init() {}
+
+    enum ConnectionStatus: Equatable {
+        case notRunning
+        case noAccess
+        case connected
+    }
 
     struct EmailSummary {
         let sender: String
@@ -23,6 +30,44 @@ final class MailService {
         var error: NSDictionary?
         let result = appleScript.executeAndReturnError(&error)
         return error == nil && result.booleanValue
+    }
+
+    func connectionStatus() -> ConnectionStatus {
+        guard isMailRunning() else { return .notRunning }
+
+        let script = """
+        tell application "Mail"
+            try
+                return (count of accounts) > 0
+            on error
+                return false
+            end try
+        end tell
+        """
+
+        guard let appleScript = NSAppleScript(source: script) else { return .noAccess }
+        var error: NSDictionary?
+        let result = appleScript.executeAndReturnError(&error)
+        if error != nil {
+            return .noAccess
+        }
+        return result.booleanValue ? .connected : .noAccess
+    }
+
+    @discardableResult
+    func connectToMailApp() async -> ConnectionStatus {
+        if !isMailRunning() {
+            NSWorkspace.shared.launchApplication("Mail")
+        }
+
+        for _ in 0..<10 {
+            let status = connectionStatus()
+            if status != .notRunning {
+                return status
+            }
+            try? await Task.sleep(for: .milliseconds(300))
+        }
+        return connectionStatus()
     }
 
     func getRecentEmails(hoursBack: Int = 24) async -> [EmailSummary] {
