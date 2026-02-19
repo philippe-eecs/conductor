@@ -6,7 +6,25 @@ Manage your projects, tasks, and calendar through natural language chat. Conduct
 
 ## Quick Start
 
-**Prerequisites:** macOS 14+ and [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed (`npm install -g @anthropic-ai/claude-code` or `brew install claude-code`).
+### 1. Install Claude Code
+
+Conductor uses [Claude Code](https://docs.anthropic.com/en/docs/claude-code) as its AI engine. Install it if you haven't:
+
+```bash
+npm install -g @anthropic-ai/claude-code
+```
+
+Then authenticate (one-time setup):
+
+```bash
+claude
+```
+
+This opens a browser for OAuth login. Once you see the Claude Code REPL, you're authenticated. You can close it — Conductor will use the same session. Your credentials are stored in `~/.claude/` and Conductor's subprocess inherits them automatically.
+
+> **Already use Claude Code?** You're all set. Skip to step 2.
+
+### 2. Build & Run
 
 ```bash
 git clone https://github.com/philippe-eecs/conductor.git
@@ -14,9 +32,9 @@ cd conductor/Conductor
 scripts/dev-run-app.sh
 ```
 
-That's it. The script builds and launches the app. Grant Calendar/Reminders permissions when prompted.
+Grant Calendar/Reminders permissions when prompted. The app appears in your menubar.
 
-> **Pre-built binary:** Download `Conductor.zip` from the [latest release](../../releases/latest), unzip, then run:
+> **Pre-built binary:** Download `Conductor.zip` from the [latest release](../../releases/latest), unzip, then:
 > ```bash
 > xattr -cr Conductor.app && open Conductor.app
 > ```
