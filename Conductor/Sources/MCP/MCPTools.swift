@@ -9,6 +9,7 @@ final class MCPToolHandlers: @unchecked Sendable {
         "conductor_find_contact",
         "conductor_get_projects",
         "conductor_get_todos",
+        "conductor_generate_visual",
         "conductor_create_todo",
         "conductor_update_todo",
         "conductor_create_project",
@@ -78,6 +79,21 @@ final class MCPToolHandlers: @unchecked Sendable {
                         "project_id": ["type": "integer", "description": "Filter by project ID. Omit for inbox or all."],
                         "include_completed": ["type": "boolean", "description": "Include completed TODOs (default false)."]
                     ]
+                ]
+            ],
+            [
+                "name": "conductor_generate_visual",
+                "description": "Generate a visual card in chat (todo watchlist or week calendar blocks).",
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "type": ["type": "string", "description": "Visual type (required): todo_watchlist or week_blocks."],
+                        "project_id": ["type": "integer", "description": "Optional project filter for todo_watchlist."],
+                        "limit": ["type": "integer", "description": "Max TODOs to show for todo_watchlist (default 12, max 50)."],
+                        "start_date": ["type": "string", "description": "Start date (YYYY-MM-DD). For week_blocks defaults to this week start."],
+                        "days": ["type": "integer", "description": "Number of days for week_blocks (default 7, max 14)."]
+                    ],
+                    "required": ["type"]
                 ]
             ],
             [
@@ -212,6 +228,8 @@ final class MCPToolHandlers: @unchecked Sendable {
                 return try handleGetProjects(arguments)
             case "conductor_get_todos":
                 return try handleGetTodos(arguments)
+            case "conductor_generate_visual":
+                return try await handleGenerateVisual(arguments)
             case "conductor_create_todo":
                 return try handleCreateTodo(arguments)
             case "conductor_update_todo":
@@ -381,6 +399,152 @@ final class MCPToolHandlers: @unchecked Sendable {
         }
 
         return contentResult(formatted)
+    }
+
+    private func handleGenerateVisual(_ args: [String: Any]) async throws -> [String: Any] {
+        guard let typeRaw = (args["type"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased(),
+            !typeRaw.isEmpty else {
+            return errorResult("type is required (todo_watchlist or week_blocks)")
+        }
+
+        switch typeRaw {
+        case "todo_watchlist", "watchlist", "todo_list":
+            return try handleGenerateTodoWatchlist(args)
+        case "week_blocks", "calendar_week", "week_calendar":
+            return await handleGenerateWeekBlocks(args)
+        default:
+            return errorResult("Unsupported type '\(typeRaw)'. Use todo_watchlist or week_blocks")
+        }
+    }
+
+    private func handleGenerateTodoWatchlist(_ args: [String: Any]) throws -> [String: Any] {
+        let repo = ProjectRepository(db: AppDatabase.shared)
+        let projectId = int64Value(args["project_id"])
+        let limit = max(1, min(50, intValue(args["limit"]) ?? 12))
+
+        let sourceTodos: [Todo]
+        if let projectId {
+            sourceTodos = try repo.todosForProject(projectId).filter { !$0.completed }
+        } else {
+            sourceTodos = try repo.allOpenTodos()
+        }
+
+        let sorted = sortTodosForWatchlist(sourceTodos)
+        let limited = Array(sorted.prefix(limit))
+
+        let projects = try repo.allProjects(includeArchived: true)
+        let projectById: [Int64: Project] = Dictionary(uniqueKeysWithValues: projects.compactMap { project in
+            guard let id = project.id else { return nil }
+            return (id, project)
+        })
+
+        let lines = limited.compactMap { todo -> TodoLineData? in
+            guard let id = todo.id else { return nil }
+            let color = todo.projectId.flatMap { projectById[$0]?.color }
+            return TodoLineData(
+                id: id,
+                title: todo.title,
+                priority: todo.priority,
+                dueDate: todo.dueDate,
+                completed: todo.completed,
+                projectColor: color
+            )
+        }
+
+        let title: String
+        if let projectId, let project = projectById[projectId] {
+            title = "TODO Watchlist: \(project.name)"
+        } else {
+            title = "TODO Watchlist"
+        }
+
+        notifyVisualCard(.todoList(TodoListCardData(title: title, todos: lines)))
+
+        var payload: [String: Any] = [
+            "status": "rendered",
+            "visual_type": "todo_watchlist",
+            "title": title,
+            "total_open_todos": sourceTodos.count,
+            "shown": lines.count
+        ]
+        if let projectId { payload["project_id"] = projectId }
+
+        return contentResult(payload)
+    }
+
+    private func handleGenerateWeekBlocks(_ args: [String: Any]) async -> [String: Any] {
+        let calendar = Calendar.current
+        let anchorDate: Date
+        if let startRaw = args["start_date"] as? String,
+           let parsed = SharedDateFormatters.databaseDate.date(from: startRaw) {
+            anchorDate = calendar.startOfDay(for: parsed)
+        } else {
+            anchorDate = startOfWeek(for: Date(), calendar: calendar)
+        }
+
+        let days = max(1, min(14, intValue(args["days"]) ?? 7))
+        guard let rangeEnd = calendar.date(byAdding: .day, value: days, to: anchorDate) else {
+            return errorResult("Unable to compute date range for week_blocks")
+        }
+
+        let events = await EventKitManager.shared.getEvents(from: anchorDate, to: rangeEnd)
+        var eventsByDay: [Date: [EventKitManager.CalendarEvent]] = [:]
+        for event in events {
+            let day = calendar.startOfDay(for: event.startDate)
+            guard day >= anchorDate, day < rangeEnd else { continue }
+            eventsByDay[day, default: []].append(event)
+        }
+
+        let dayColumns: [WeekDayColumnData] = (0..<days).compactMap { offset in
+            guard let day = calendar.date(byAdding: .day, value: offset, to: anchorDate) else {
+                return nil
+            }
+            let dayKey = calendar.startOfDay(for: day)
+            let dayEvents = (eventsByDay[dayKey] ?? []).sorted { lhs, rhs in
+                if lhs.isAllDay != rhs.isAllDay {
+                    return lhs.isAllDay && !rhs.isAllDay
+                }
+                if lhs.startDate != rhs.startDate {
+                    return lhs.startDate < rhs.startDate
+                }
+                return lhs.endDate < rhs.endDate
+            }
+
+            let blocks = dayEvents.map { event in
+                WeekBlockData(
+                    id: event.id,
+                    title: event.title,
+                    startDate: event.startDate,
+                    endDate: event.endDate,
+                    isAllDay: event.isAllDay,
+                    calendarTitle: event.calendarTitle
+                )
+            }
+
+            return WeekDayColumnData(
+                id: SharedDateFormatters.databaseDate.string(from: dayKey),
+                date: dayKey,
+                blocks: blocks
+            )
+        }
+
+        let title = weekBlocksTitle(startDate: anchorDate, days: days, calendar: calendar)
+        notifyVisualCard(.weekBlocks(WeekBlocksCardData(
+            title: title,
+            startDate: anchorDate,
+            dayColumns: dayColumns
+        )))
+
+        return contentResult([
+            "status": "rendered",
+            "visual_type": "week_blocks",
+            "title": title,
+            "start_date": SharedDateFormatters.databaseDate.string(from: anchorDate),
+            "days": days,
+            "events": events.count
+        ])
     }
 
     // MARK: - WRITE Tools
@@ -714,6 +878,88 @@ final class MCPToolHandlers: @unchecked Sendable {
         return formatter
     }()
 
+    private func int64Value(_ raw: Any?) -> Int64? {
+        if let value = raw as? Int64 { return value }
+        if let value = raw as? Int { return Int64(value) }
+        if let value = raw as? NSNumber { return value.int64Value }
+        if let value = raw as? String { return Int64(value) }
+        return nil
+    }
+
+    private func intValue(_ raw: Any?) -> Int? {
+        if let value = raw as? Int { return value }
+        if let value = raw as? Int64 { return Int(value) }
+        if let value = raw as? NSNumber { return value.intValue }
+        if let value = raw as? String { return Int(value) }
+        return nil
+    }
+
+    private func sortTodosForWatchlist(_ todos: [Todo]) -> [Todo] {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: today) ?? today
+        let nextWeekBoundary = calendar.date(byAdding: .day, value: 7, to: tomorrow) ?? tomorrow
+
+        return todos.sorted { lhs, rhs in
+            let leftBucket = urgencyBucket(
+                dueDate: lhs.dueDate,
+                calendar: calendar,
+                today: today,
+                tomorrow: tomorrow,
+                nextWeekBoundary: nextWeekBoundary
+            )
+            let rightBucket = urgencyBucket(
+                dueDate: rhs.dueDate,
+                calendar: calendar,
+                today: today,
+                tomorrow: tomorrow,
+                nextWeekBoundary: nextWeekBoundary
+            )
+
+            if leftBucket != rightBucket { return leftBucket < rightBucket }
+            if lhs.priority != rhs.priority { return lhs.priority > rhs.priority }
+
+            switch (lhs.dueDate, rhs.dueDate) {
+            case let (l?, r?) where l != r:
+                return l < r
+            case (nil, _?):
+                return false
+            case (_?, nil):
+                return true
+            default:
+                if lhs.createdAt != rhs.createdAt { return lhs.createdAt > rhs.createdAt }
+                return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+            }
+        }
+    }
+
+    private func urgencyBucket(
+        dueDate: Date?,
+        calendar: Calendar,
+        today: Date,
+        tomorrow: Date,
+        nextWeekBoundary: Date
+    ) -> Int {
+        guard let dueDate else { return 4 }
+        let dueDay = calendar.startOfDay(for: dueDate)
+        if dueDay < today { return 0 }
+        if dueDay < tomorrow { return 1 }
+        if dueDay < nextWeekBoundary { return 2 }
+        return 3
+    }
+
+    private func startOfWeek(for date: Date, calendar: Calendar) -> Date {
+        let startOfDay = calendar.startOfDay(for: date)
+        let weekday = calendar.component(.weekday, from: startOfDay)
+        let offset = (weekday - calendar.firstWeekday + 7) % 7
+        return calendar.date(byAdding: .day, value: -offset, to: startOfDay) ?? startOfDay
+    }
+
+    private func weekBlocksTitle(startDate: Date, days: Int, calendar: Calendar) -> String {
+        let endDate = calendar.date(byAdding: .day, value: max(days - 1, 0), to: startDate) ?? startDate
+        return "Week Blocks: \(SharedDateFormatters.shortMonthDay.string(from: startDate)) - \(SharedDateFormatters.shortMonthDay.string(from: endDate))"
+    }
+
     private func contentResult(_ value: Any) -> [String: Any] {
         let jsonString: String
         if let data = try? JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys]),
@@ -747,5 +993,9 @@ final class MCPToolHandlers: @unchecked Sendable {
 
     private func notifyOperationReceipt(_ receipt: OperationReceiptData) {
         NotificationCenter.default.post(name: .mcpOperationReceipt, object: receipt)
+    }
+
+    private func notifyVisualCard(_ card: ChatUIElement) {
+        NotificationCenter.default.post(name: .mcpVisualCard, object: card)
     }
 }

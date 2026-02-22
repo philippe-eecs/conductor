@@ -76,6 +76,8 @@ struct WorkspaceSurfaceContentView: View {
                 .background(Color(nsColor: .textBackgroundColor))
             case .projects:
                 ProjectsWorkspaceView()
+            case .email:
+                EmailWorkspaceView()
             }
         }
     }

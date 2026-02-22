@@ -3,6 +3,7 @@ import Combine
 
 extension Notification.Name {
     static let mcpOperationReceipt = Notification.Name("mcpOperationReceipt")
+    static let mcpVisualCard = Notification.Name("mcpVisualCard")
 }
 
 @MainActor
@@ -55,7 +56,9 @@ final class AppState: ObservableObject {
 
     // Pending receipts accumulated during a Claude call
     private var pendingReceipts: [OperationReceiptData] = []
+    private var pendingVisualCards: [ChatUIElement] = []
     private var receiptObserver: AnyCancellable?
+    private var visualCardObserver: AnyCancellable?
     private var openPromptObserver: AnyCancellable?
 
     private enum PrefKey {
@@ -76,6 +79,14 @@ final class AppState: ObservableObject {
             .sink { [weak self] notification in
                 if let receipt = notification.object as? OperationReceiptData {
                     self?.pendingReceipts.append(receipt)
+                }
+            }
+
+        visualCardObserver = NotificationCenter.default.publisher(for: .mcpVisualCard)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] notification in
+                if let card = notification.object as? ChatUIElement {
+                    self?.pendingVisualCards.append(card)
                 }
             }
 
@@ -326,6 +337,7 @@ final class AppState: ObservableObject {
         isLoading = true
         currentInput = ""
         pendingReceipts = []
+        pendingVisualCards = []
 
         // Save user message
         let userMsg = try? messageRepo.saveMessage(role: "user", content: trimmed, sessionId: currentSessionId)
@@ -369,6 +381,10 @@ final class AppState: ObservableObject {
                     var meta = MessageMetadata()
                     meta.model = response.model
                     meta.toolCallNames = response.toolCallNames ?? []
+
+                    // Attach visual cards produced by tools in this run.
+                    meta.uiElements.append(contentsOf: pendingVisualCards)
+                    pendingVisualCards = []
 
                     // Attach any pending receipts as UI elements
                     for receipt in pendingReceipts {

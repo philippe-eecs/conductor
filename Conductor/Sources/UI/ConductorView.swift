@@ -47,42 +47,25 @@ struct ConductorView: View {
             Text("Conductor")
                 .font(.headline)
 
-            Picker("Workspace", selection: Binding(
-                get: { appState.primarySurface },
-                set: { appState.openSurface($0, in: .primary) }
-            )) {
-                ForEach(WorkspaceSurface.navigationOrder) { surface in
-                    Label(surface.title, systemImage: surface.icon)
-                        .tag(surface)
-                }
-            }
-            .pickerStyle(.segmented)
-            .frame(maxWidth: 420)
+            Text(appState.primarySurface.title)
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color(nsColor: .controlBackgroundColor))
+                .clipShape(Capsule())
 
             Spacer()
 
-            Button {
-                appState.detachSurface(appState.primarySurface)
-            } label: {
-                Label("Open in Window", systemImage: "arrow.up.right.square")
+            if appState.mailConnectionStatus == .connected, appState.unreadEmailCount > 0 {
+                Button {
+                    appState.openSurface(.email, in: .primary)
+                } label: {
+                    Label("\(appState.unreadEmailCount) unread", systemImage: "envelope.badge")
+                        .font(.caption)
+                }
+                .buttonStyle(.borderless)
+                .help("Open Email")
             }
-            .buttonStyle(.borderless)
-
-            Button {
-                appState.startNewConversation()
-                appState.openSurface(.chat, in: .primary)
-            } label: {
-                Label("New Chat", systemImage: "square.and.pencil")
-            }
-            .buttonStyle(.borderless)
-
-            Button {
-                appState.showSettings = true
-            } label: {
-                Image(systemName: "gearshape")
-            }
-            .buttonStyle(.plain)
-            .help("Settings")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
@@ -105,6 +88,9 @@ struct ConductorView: View {
 
             Button("") { appState.openSurface(.projects) }
                 .keyboardShortcut("5", modifiers: .command)
+
+            Button("") { appState.openSurface(.email) }
+                .keyboardShortcut("6", modifiers: .command)
 
             Button("") {
                 appState.startNewConversation()

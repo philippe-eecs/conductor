@@ -113,13 +113,8 @@ actor BlinkEngine {
                 }
 
             case .agent:
-                if let todoId = decision.agentTodoId, let prompt = decision.agentPrompt {
-                    Log.blink.info("Blink: agent dispatch for TODO \(todoId)")
-                    let run = try blinkRepo.createAgentRun(todoId: todoId, prompt: prompt)
-                    Task.detached {
-                        await AgentDispatcher.shared.execute(runId: run.id!, todoId: todoId, prompt: prompt)
-                    }
-                }
+                // Agent dispatch is not yet enabled — treat as silent
+                Log.blink.info("Blink: agent decision ignored (not yet enabled)")
             }
 
             Log.blink.info("Blink cycle complete (cost: \(response.totalCostUsd ?? 0))")

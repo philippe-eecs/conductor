@@ -17,6 +17,7 @@ enum ChatAction {
 enum ChatUIElement: Identifiable {
     case operationReceipt(OperationReceiptData)
     case todaySchedule(TodayScheduleData)
+    case weekBlocks(WeekBlocksCardData)
     case projectSnapshot(ProjectSnapshotData)
     case todoList(TodoListCardData)
 
@@ -24,6 +25,7 @@ enum ChatUIElement: Identifiable {
         switch self {
         case .operationReceipt(let d): return "receipt-\(d.id)"
         case .todaySchedule(let d): return "schedule-\(d.id)"
+        case .weekBlocks(let d): return "weekblocks-\(d.id)"
         case .projectSnapshot(let d): return "project-\(d.id)"
         case .todoList(let d): return "todolist-\(d.id)"
         }
@@ -99,6 +101,37 @@ struct ScheduleEventData: Identifiable {
         if hours > 0 && minutes > 0 { return "\(hours)h \(minutes)m" }
         else if hours > 0 { return "\(hours)h" }
         else { return "\(minutes)m" }
+    }
+}
+
+// MARK: - Week Blocks
+
+struct WeekBlocksCardData: Identifiable {
+    let id = UUID().uuidString
+    let title: String
+    let startDate: Date
+    let dayColumns: [WeekDayColumnData]
+}
+
+struct WeekDayColumnData: Identifiable {
+    let id: String
+    let date: Date
+    let blocks: [WeekBlockData]
+}
+
+struct WeekBlockData: Identifiable {
+    let id: String
+    let title: String
+    let startDate: Date
+    let endDate: Date
+    let isAllDay: Bool
+    let calendarTitle: String
+
+    var timeRange: String {
+        if isAllDay { return "All day" }
+        let start = SharedDateFormatters.shortTime.string(from: startDate)
+        let end = SharedDateFormatters.shortTime.string(from: endDate)
+        return "\(start) - \(end)"
     }
 }
 
