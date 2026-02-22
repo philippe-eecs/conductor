@@ -9,7 +9,8 @@ enum BlinkPromptBuilder {
         openTodos: [Todo],
         runningAgents: [AgentRun],
         recentBlinks: [BlinkLog],
-        unreadEmailCount: Int
+        unreadEmailCount: Int,
+        recentEmails: [MailService.EmailSummary]
     ) -> String {
         let now = Date()
         let timeStr = SharedDateFormatters.fullDateTime.string(from: now)
@@ -62,6 +63,13 @@ enum BlinkPromptBuilder {
         if unreadEmailCount > 0 {
             sections.append("Unread emails: \(unreadEmailCount)")
         }
+        if !recentEmails.isEmpty {
+            let lines = recentEmails.prefix(5).map { email in
+                let state = email.isRead ? "read" : "unread"
+                return "- [\(state)] \(email.sender): \(email.subject)"
+            }.joined(separator: "\n")
+            sections.append("Recent emails:\n\(lines)")
+        }
 
         // Recent blink history (for anti-repetition)
         if !recentBlinks.isEmpty {
@@ -94,6 +102,7 @@ enum BlinkPromptBuilder {
         - Default to "silent". Only notify when genuinely necessary.
         - Do NOT repeat notifications from recent blinks.
         - Do NOT notify about things the user likely already knows.
+        - If the notification is about an important email, include a practical "suggested_prompt" the user can run in chat to draft a reply.
         - If in doubt, choose "silent".
 
         Context:
@@ -104,6 +113,7 @@ enum BlinkPromptBuilder {
           "decision": "silent" | "notify" | "agent",
           "notification_title": "...",  // only if decision is "notify"
           "notification_body": "...",    // only if decision is "notify"
+          "suggested_prompt": "...",     // optional prompt to prefill chat when opening notification
           "agent_todo_id": 123,          // only if decision is "agent"
           "agent_prompt": "...",         // only if decision is "agent"
           "reasoning": "..."             // brief explanation for the log

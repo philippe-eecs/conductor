@@ -63,7 +63,6 @@ struct WorkspaceSidebarView: View {
 
     private func navigationRow(_ surface: WorkspaceSurface) -> some View {
         let isPrimary = appState.primarySurface == surface
-        let isSecondary = appState.secondarySurface == surface
         let isDetached = appState.isSurfaceDetached(surface)
 
         return Button {
@@ -83,16 +82,8 @@ struct WorkspaceSidebarView: View {
                         .background(Color.mint.opacity(0.14))
                         .foregroundColor(.mint)
                         .clipShape(Capsule())
-                } else if isSecondary {
-                    Text("Right")
-                        .font(.system(size: 9, weight: .semibold))
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(Color.orange.opacity(0.14))
-                        .foregroundColor(.orange)
-                        .clipShape(Capsule())
                 } else if isPrimary {
-                    Text("Left")
+                    Text("Current")
                         .font(.system(size: 9, weight: .semibold))
                         .padding(.horizontal, 5)
                         .padding(.vertical, 2)
@@ -108,19 +99,13 @@ struct WorkspaceSidebarView: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
-            Button("Open in Left Pane") {
+            Button("Open Here") {
                 appState.openSurface(surface, in: .primary)
-            }
-            Button("Open in Right Pane") {
-                appState.openSurface(surface, in: .secondary)
             }
             Divider()
             if isDetached {
-                Button("Dock to Left") {
+                Button("Dock to Main Window") {
                     appState.redockSurface(surface, to: .primary)
-                }
-                Button("Dock to Right") {
-                    appState.redockSurface(surface, to: .secondary)
                 }
             } else {
                 Button("Open in Separate Window") {

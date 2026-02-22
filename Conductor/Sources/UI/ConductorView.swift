@@ -18,6 +18,9 @@ struct ConductorView: View {
             SettingsView()
                 .frame(width: 420, height: 400)
         }
+        .sheet(isPresented: $appState.showPermissionsPrompt) {
+            PermissionsPromptView()
+        }
     }
 
     private var workspaceShell: some View {
@@ -35,16 +38,6 @@ struct ConductorView: View {
                     showsCloseButton: false
                 )
                 .frame(minWidth: 460, maxWidth: .infinity, maxHeight: .infinity)
-
-                if let secondary = appState.secondarySurface {
-                    WorkspacePaneView(
-                        surface: secondary,
-                        role: .secondary,
-                        isDetached: false,
-                        showsCloseButton: true
-                    )
-                    .frame(minWidth: 360, idealWidth: 440, maxWidth: .infinity, maxHeight: .infinity)
-                }
             }
         }
     }
@@ -54,36 +47,24 @@ struct ConductorView: View {
             Text("Conductor")
                 .font(.headline)
 
-            ForEach(WorkspaceSurface.navigationOrder) { surface in
-                toolbarSurfaceButton(surface)
-            }
+            Text(appState.primarySurface.title)
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color(nsColor: .controlBackgroundColor))
+                .clipShape(Capsule())
 
             Spacer()
 
-            if let secondary = appState.secondarySurface {
-                Menu {
-                    ForEach(WorkspaceSurface.navigationOrder) { surface in
-                        Button {
-                            appState.openSurface(surface, in: .secondary)
-                        } label: {
-                            Label(surface.title, systemImage: surface.icon)
-                        }
-                    }
-                    Divider()
-                    Button("Close Right Pane") {
-                        appState.clearSecondaryPane()
-                    }
-                } label: {
-                    Label("Right: \(secondary.title)", systemImage: "rectangle.split.2x1")
-                }
-                .menuStyle(.borderlessButton)
-            } else {
+            if appState.mailConnectionStatus == .connected, appState.unreadEmailCount > 0 {
                 Button {
-                    appState.toggleSecondaryPane(default: .calendar)
+                    appState.openSurface(.email, in: .primary)
                 } label: {
-                    Label("Open Right Pane", systemImage: "rectangle.split.2x1")
+                    Label("\(appState.unreadEmailCount) unread", systemImage: "envelope.badge")
+                        .font(.caption)
                 }
                 .buttonStyle(.borderless)
+                .help("Open Email")
             }
 
             Button {
@@ -91,6 +72,7 @@ struct ConductorView: View {
                 appState.openSurface(.chat, in: .primary)
             } label: {
                 Label("New Chat", systemImage: "square.and.pencil")
+                    .font(.caption)
             }
             .buttonStyle(.borderless)
 
@@ -98,6 +80,7 @@ struct ConductorView: View {
                 appState.showSettings = true
             } label: {
                 Image(systemName: "gearshape")
+                    .font(.caption)
             }
             .buttonStyle(.plain)
             .help("Settings")
@@ -105,22 +88,6 @@ struct ConductorView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
         .background(Color(nsColor: .underPageBackgroundColor))
-    }
-
-    private func toolbarSurfaceButton(_ surface: WorkspaceSurface) -> some View {
-        let isSelected = appState.primarySurface == surface
-        return Button {
-            appState.openSurface(surface, in: .primary)
-        } label: {
-            Label(surface.title, systemImage: surface.icon)
-                .font(.caption.weight(.semibold))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .background(isSelected ? Color.accentColor.opacity(0.16) : Color.clear)
-                .clipShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .help("Open \(surface.title) in left pane")
     }
 
     private var keyboardShortcuts: some View {
@@ -140,8 +107,8 @@ struct ConductorView: View {
             Button("") { appState.openSurface(.projects) }
                 .keyboardShortcut("5", modifiers: .command)
 
-            Button("") { appState.toggleSecondaryPane(default: .calendar) }
-                .keyboardShortcut("\\", modifiers: .command)
+            Button("") { appState.openSurface(.email) }
+                .keyboardShortcut("6", modifiers: .command)
 
             Button("") {
                 appState.startNewConversation()

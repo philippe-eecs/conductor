@@ -374,10 +374,13 @@ actor ClaudeService {
         sections.append("""
         ## MCP Tools
         You have tools to read and modify the user's data:
-        - conductor_get_calendar / conductor_get_reminders: Fetch calendar or reminders for any date range
+        - conductor_get_calendar / conductor_get_reminders / conductor_get_recent_emails: Fetch calendar, reminders, or email context
+        - conductor_find_contact: Resolve contact names to emails
         - conductor_get_projects / conductor_get_todos: List projects or TODOs (with filters)
+        - conductor_generate_visual: Spawn a TODO watchlist card or week calendar blocks card in chat
         - conductor_create_project / conductor_create_todo / conductor_update_todo: Create or modify data
-        - conductor_create_calendar_block: Create a calendar event for time blocking
+        - conductor_create_calendar_block / conductor_update_calendar_event / conductor_delete_calendar_event: Create, move, reschedule, or delete calendar events
+        - conductor_schedule_meeting: Find a free slot in a time window and schedule a meeting with a contact
         - conductor_dispatch_agent: Dispatch a background AI agent to work on a TODO
 
         The snapshot above is your starting context. Use MCP tools when the user asks for
@@ -397,12 +400,18 @@ actor ClaudeService {
     private static let allowedMCPToolsArgument = [
         "mcp__conductor-context__conductor_get_calendar",
         "mcp__conductor-context__conductor_get_reminders",
+        "mcp__conductor-context__conductor_get_recent_emails",
+        "mcp__conductor-context__conductor_find_contact",
         "mcp__conductor-context__conductor_get_projects",
         "mcp__conductor-context__conductor_get_todos",
+        "mcp__conductor-context__conductor_generate_visual",
         "mcp__conductor-context__conductor_create_todo",
         "mcp__conductor-context__conductor_update_todo",
         "mcp__conductor-context__conductor_create_project",
         "mcp__conductor-context__conductor_create_calendar_block",
+        "mcp__conductor-context__conductor_update_calendar_event",
+        "mcp__conductor-context__conductor_delete_calendar_event",
+        "mcp__conductor-context__conductor_schedule_meeting",
         "mcp__conductor-context__conductor_dispatch_agent"
     ].joined(separator: ",")
 

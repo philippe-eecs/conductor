@@ -12,6 +12,8 @@ struct ChatUIElementsView: View {
                     OperationReceiptCard(data: data, onAction: onAction)
                 case .todaySchedule(let data):
                     TodayScheduleCard(data: data)
+                case .weekBlocks(let data):
+                    WeekBlocksCard(data: data)
                 case .projectSnapshot(let data):
                     ProjectSnapshotCard(data: data, onAction: onAction)
                 case .todoList(let data):
@@ -221,6 +223,78 @@ struct TodayScheduleCard: View {
     }
 }
 
+// MARK: - Week Blocks Card
+
+struct WeekBlocksCard: View {
+    let data: WeekBlocksCardData
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "calendar.badge.clock")
+                    .foregroundColor(.accentColor)
+                Text(data.title)
+                    .font(.callout.weight(.medium))
+                Spacer()
+                Text("\(totalBlocks) blocks")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            ForEach(data.dayColumns) { day in
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text(SharedDateFormatters.shortDayDate.string(from: day.date))
+                            .font(.caption.weight(.medium))
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Text("\(day.blocks.count)")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+
+                    if day.blocks.isEmpty {
+                        Text("No events")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .padding(.leading, 2)
+                    } else {
+                        ForEach(day.blocks) { block in
+                            HStack(spacing: 6) {
+                                Text(block.timeRange)
+                                    .font(.caption2.monospacedDigit())
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                                    .frame(width: 120, alignment: .leading)
+                                RoundedRectangle(cornerRadius: 1)
+                                    .fill(Color.accentColor)
+                                    .frame(width: 2, height: 14)
+                                Text(block.title)
+                                    .font(.caption)
+                                    .lineLimit(1)
+                                Spacer()
+                                Text(block.calendarTitle)
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                            }
+                        }
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+        }
+        .padding(10)
+        .background(Color(nsColor: .textBackgroundColor))
+        .cornerRadius(8)
+    }
+
+    private var totalBlocks: Int {
+        data.dayColumns.reduce(0) { $0 + $1.blocks.count }
+    }
+}
+
 // MARK: - Project Snapshot Card
 
 struct ProjectSnapshotCard: View {
@@ -318,44 +392,50 @@ struct TodoListCard: View {
                     .font(.callout.weight(.medium))
             }
 
-            ForEach(data.todos) { todo in
-                HStack(spacing: 6) {
-                    Button {
-                        onAction(.completeTodo(todoId: todo.id))
-                    } label: {
-                        Image(systemName: todo.completed ? "checkmark.circle.fill" : "circle")
-                            .font(.callout)
-                            .foregroundColor(todo.completed ? .green : .secondary)
-                    }
-                    .buttonStyle(.plain)
+            if data.todos.isEmpty {
+                Text("No open TODOs for this view.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                ForEach(data.todos) { todo in
+                    HStack(spacing: 6) {
+                        Button {
+                            onAction(.completeTodo(todoId: todo.id))
+                        } label: {
+                            Image(systemName: todo.completed ? "checkmark.circle.fill" : "circle")
+                                .font(.callout)
+                                .foregroundColor(todo.completed ? .green : .secondary)
+                        }
+                        .buttonStyle(.plain)
 
-                    Button {
-                        onAction(.viewTodo(todoId: todo.id))
-                    } label: {
-                        Text(todo.title)
-                            .font(.callout)
-                            .strikethrough(todo.completed)
-                            .foregroundColor(todo.completed ? .secondary : .primary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .buttonStyle(.plain)
+                        Button {
+                            onAction(.viewTodo(todoId: todo.id))
+                        } label: {
+                            Text(todo.title)
+                                .font(.callout)
+                                .strikethrough(todo.completed)
+                                .foregroundColor(todo.completed ? .secondary : .primary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .buttonStyle(.plain)
 
-                    Spacer()
+                        Spacer()
 
-                    if todo.priority >= 2 {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.caption2)
-                            .foregroundColor(todo.priority >= 3 ? .red : .orange)
-                    }
+                        if todo.priority >= 2 {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.caption2)
+                                .foregroundColor(todo.priority >= 3 ? .red : .orange)
+                        }
 
-                    if let due = todo.dueDate {
-                        Text(SharedDateFormatters.shortMonthDay.string(from: due))
-                            .font(.caption2)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 2)
-                            .background(dueDateColor(due).opacity(0.15))
-                            .foregroundColor(dueDateColor(due))
-                            .cornerRadius(3)
+                        if let due = todo.dueDate {
+                            Text(SharedDateFormatters.shortMonthDay.string(from: due))
+                                .font(.caption2)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 2)
+                                .background(dueDateColor(due).opacity(0.15))
+                                .foregroundColor(dueDateColor(due))
+                                .cornerRadius(3)
+                        }
                     }
                 }
             }

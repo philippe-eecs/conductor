@@ -3,192 +3,69 @@ import SwiftUI
 struct DashboardView: View {
     @EnvironmentObject var appState: AppState
 
-    @State private var weekEvents: [EventKitManager.CalendarEvent] = []
-
     private var sortedTodayEvents: [EventKitManager.CalendarEvent] {
         appState.todayEvents.sorted { $0.startDate < $1.startDate }
     }
 
-    private var weekStart: Date {
-        let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
-        let weekday = calendar.component(.weekday, from: today)
-        let offset = (weekday - calendar.firstWeekday + 7) % 7
-        return calendar.date(byAdding: .day, value: -offset, to: today) ?? today
+    private var upcomingTasks: [Todo] {
+        appState.openTodos
+            .filter { $0.dueDate != nil }
+            .sorted {
+                let lhs = $0.dueDate ?? .distantFuture
+                let rhs = $1.dueDate ?? .distantFuture
+                if lhs == rhs { return $0.priority > $1.priority }
+                return lhs < rhs
+            }
     }
 
-    private var weekEnd: Date {
-        Calendar.current.date(byAdding: .day, value: 7, to: weekStart) ?? weekStart
-    }
-
-    private var weekDays: [Date] {
-        (0..<7).compactMap { Calendar.current.date(byAdding: .day, value: $0, to: weekStart) }
-    }
-
-    private var openTasksThisWeek: [Todo] {
+    private var videoTasks: [Todo] {
         appState.openTodos.filter { todo in
-            guard let due = todo.dueDate else { return false }
-            return due >= weekStart && due < weekEnd
+            let titleHit = todo.title.localizedCaseInsensitiveContains("video")
+            guard !titleHit else { return true }
+            guard let projectId = todo.projectId else { return false }
+            let projectName = appState.projects.first { $0.project.id == projectId }?.project.name ?? ""
+            return projectName.localizedCaseInsensitiveContains("video")
         }
     }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 14) {
                 header
-                quickActions
-                summaryCards
-                weekBoard
-                todayAgenda
-                todayTodos
+                calendarCard
+                tasksCard
+                videoCard
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 14)
         }
         .background(Color(nsColor: .textBackgroundColor))
         .task {
-            await refreshWeekEvents()
+            await appState.loadTodayData()
         }
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 4) {
             Text("Dashboard")
                 .font(.title2.weight(.semibold))
             Text(SharedDateFormatters.fullDate.string(from: Date()))
-                .font(.callout)
-                .foregroundColor(.secondary)
-        }
-    }
-
-    private var quickActions: some View {
-        HStack(spacing: 8) {
-            Button {
-                appState.openSurface(.calendar, in: .primary)
-            } label: {
-                Label("Open Calendar", systemImage: "calendar")
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
-
-            Button {
-                appState.openSurface(.tasks, in: .secondary)
-            } label: {
-                Label("Review Tasks", systemImage: "checklist")
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-
-            Button {
-                appState.openSurface(.chat, in: .secondary)
-            } label: {
-                Label("Plan with Chat", systemImage: "bubble.left.and.bubble.right")
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-        }
-    }
-
-    private var summaryCards: some View {
-        HStack(spacing: 10) {
-            summaryCard(
-                title: "Today's Events",
-                value: "\(sortedTodayEvents.count)",
-                subtitle: sortedTodayEvents.first?.title ?? "No meetings scheduled",
-                tint: .blue
-            )
-            summaryCard(
-                title: "Due Today",
-                value: "\(appState.todayTodos.count)",
-                subtitle: appState.todayTodos.first?.title ?? "No due tasks",
-                tint: .orange
-            )
-            summaryCard(
-                title: "Open Tasks",
-                value: "\(appState.openTodos.count)",
-                subtitle: "\(openTasksThisWeek.count) due this week",
-                tint: .green
-            )
-        }
-    }
-
-    private func summaryCard(title: String, value: String, subtitle: String, tint: Color) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(.caption.weight(.medium))
-                .foregroundColor(.secondary)
-            Text(value)
-                .font(.title3.weight(.semibold))
-                .foregroundColor(tint)
-            Text(subtitle)
                 .font(.caption)
                 .foregroundColor(.secondary)
-                .lineLimit(1)
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: .controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
-    private var weekBoard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("This Week")
-                .font(.headline)
-
-            ForEach(weekDays, id: \.self) { day in
-                HStack(spacing: 10) {
-                    Text(SharedDateFormatters.shortDayDate.string(from: day))
-                        .font(.caption.weight(.medium))
-                        .frame(width: 90, alignment: .leading)
-
-                    let events = events(on: day)
-                    let todos = todos(on: day)
-
-                    Text("\(events.count) events")
-                        .font(.caption2)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .background(Color.blue.opacity(0.14))
-                        .foregroundColor(.blue)
-                        .clipShape(Capsule())
-
-                    Text("\(todos.count) tasks")
-                        .font(.caption2)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .background(Color.orange.opacity(0.14))
-                        .foregroundColor(.orange)
-                        .clipShape(Capsule())
-
-                    if let firstTitle = events.first?.title ?? todos.first?.title {
-                        Text(firstTitle)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
-                    }
-
-                    Spacer()
-                }
-                .padding(.vertical, 2)
-            }
-        }
-        .padding(12)
-        .background(Color(nsColor: .controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-    }
-
-    private var todayAgenda: some View {
+    private var calendarCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Today's Agenda")
+                Text("Calendar")
                     .font(.headline)
                 Spacer()
-                Button("Open Full Calendar") {
-                    appState.openSurface(.calendar)
+                Button("Open") {
+                    appState.openSurface(.calendar, in: .primary)
                 }
-                .buttonStyle(.plain)
-                .font(.caption)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
             }
 
             if sortedTodayEvents.isEmpty {
@@ -196,17 +73,15 @@ struct DashboardView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
             } else {
-                ForEach(sortedTodayEvents, id: \.id) { event in
-                    HStack(spacing: 10) {
+                ForEach(sortedTodayEvents.prefix(6), id: \.id) { event in
+                    HStack(spacing: 8) {
                         Text(event.time)
                             .font(.caption2.monospacedDigit())
                             .foregroundColor(.secondary)
-                            .frame(width: 62, alignment: .trailing)
-                        RoundedRectangle(cornerRadius: 1)
-                            .fill(Color.accentColor)
-                            .frame(width: 2, height: 16)
+                            .frame(width: 58, alignment: .trailing)
                         Text(event.title)
                             .font(.caption)
+                            .lineLimit(1)
                         Spacer()
                         Text(event.duration)
                             .font(.caption2)
@@ -220,35 +95,62 @@ struct DashboardView: View {
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
-    private var todayTodos: some View {
+    private var tasksCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Today's Tasks")
+                Text("Tasks")
                     .font(.headline)
                 Spacer()
-                Button("Open Tasks") {
-                    appState.openSurface(.tasks)
+                Button("Open") {
+                    appState.openSurface(.tasks, in: .primary)
                 }
-                .buttonStyle(.plain)
-                .font(.caption)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
             }
 
-            if appState.todayTodos.isEmpty {
-                Text("No tasks due today.")
+            if upcomingTasks.isEmpty {
+                Text("No tasks with due dates.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             } else {
-                ForEach(appState.todayTodos, id: \.id) { todo in
-                    TodoRowView(
-                        todo: todo,
-                        projectColor: nil,
-                        onToggle: { appState.toggleTodoCompletion(todo.id!) },
-                        onSelect: {
-                            appState.selectTodo(todo.id)
-                            appState.openSurface(.tasks, in: .secondary)
-                        },
-                        isSelected: appState.selectedTodoId == todo.id
-                    )
+                ForEach(upcomingTasks.prefix(6), id: \.id) { todo in
+                    HStack(spacing: 8) {
+                        if let todoId = todo.id {
+                            Button {
+                                appState.toggleTodoCompletion(todoId)
+                            } label: {
+                                Image(systemName: todo.completed ? "checkmark.circle.fill" : "circle")
+                                    .font(.caption2)
+                                    .foregroundColor(todo.completed ? .green : .secondary)
+                            }
+                            .buttonStyle(.plain)
+
+                            Button {
+                                appState.selectTodo(todoId)
+                                appState.openSurface(.tasks, in: .primary)
+                            } label: {
+                                Text(todo.title)
+                                    .font(.caption)
+                                    .lineLimit(1)
+                                    .foregroundColor(.primary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .buttonStyle(.plain)
+                        } else {
+                            Image(systemName: "circle")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                            Text(todo.title)
+                                .font(.caption)
+                                .lineLimit(1)
+                        }
+                        Spacer()
+                        if let due = todo.dueDate {
+                            Text(SharedDateFormatters.shortMonthDay.string(from: due))
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                    }
                 }
             }
         }
@@ -257,18 +159,36 @@ struct DashboardView: View {
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
-    private func events(on day: Date) -> [EventKitManager.CalendarEvent] {
-        weekEvents.filter { Calendar.current.isDate($0.startDate, inSameDayAs: day) }
-    }
+    private var videoCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Video Tasks")
+                .font(.headline)
 
-    private func todos(on day: Date) -> [Todo] {
-        appState.openTodos.filter { todo in
-            guard let due = todo.dueDate else { return false }
-            return Calendar.current.isDate(due, inSameDayAs: day)
+            if videoTasks.isEmpty {
+                Text("No video-related tasks found.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                ForEach(videoTasks.prefix(5), id: \.id) { todo in
+                    HStack(spacing: 8) {
+                        Image(systemName: "video")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        Text(todo.title)
+                            .font(.caption)
+                            .lineLimit(1)
+                        Spacer()
+                        if let due = todo.dueDate {
+                            Text(SharedDateFormatters.shortMonthDay.string(from: due))
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+            }
         }
-    }
-
-    private func refreshWeekEvents() async {
-        weekEvents = await EventKitManager.shared.getEvents(from: weekStart, to: weekEnd)
+        .padding(12)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }

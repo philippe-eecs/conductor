@@ -3,6 +3,7 @@ import Combine
 
 extension Notification.Name {
     static let mcpOperationReceipt = Notification.Name("mcpOperationReceipt")
+    static let mcpVisualCard = Notification.Name("mcpVisualCard")
 }
 
 @MainActor
@@ -32,7 +33,7 @@ final class AppState: ObservableObject {
 
     // Workspace routing
     @Published var primarySurface: WorkspaceSurface = .dashboard
-    @Published var secondarySurface: WorkspaceSurface? = .calendar
+    @Published var secondarySurface: WorkspaceSurface?
     @Published var detachedSurfaces: Set<WorkspaceSurface> = []
 
     // Setup
@@ -40,9 +41,12 @@ final class AppState: ObservableObject {
     @Published var hasRemindersAccess: Bool = false
     @Published var isCliAvailable: Bool = false
     @Published var showSetup: Bool = false
+    @Published var mailConnectionStatus: MailService.ConnectionStatus = .notRunning
+    @Published var unreadEmailCount: Int = 0
 
     // Settings
     @Published var showSettings: Bool = false
+    @Published var showPermissionsPrompt: Bool = false
 
     // Repositories
     let projectRepo: ProjectRepository
@@ -52,7 +56,10 @@ final class AppState: ObservableObject {
 
     // Pending receipts accumulated during a Claude call
     private var pendingReceipts: [OperationReceiptData] = []
+    private var pendingVisualCards: [ChatUIElement] = []
     private var receiptObserver: AnyCancellable?
+    private var visualCardObserver: AnyCancellable?
+    private var openPromptObserver: AnyCancellable?
 
     private enum PrefKey {
         static let workspacePrimary = "workspace.primarySurface"
@@ -74,20 +81,42 @@ final class AppState: ObservableObject {
                     self?.pendingReceipts.append(receipt)
                 }
             }
+
+        visualCardObserver = NotificationCenter.default.publisher(for: .mcpVisualCard)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] notification in
+                if let card = notification.object as? ChatUIElement {
+                    self?.pendingVisualCards.append(card)
+                }
+            }
+
+        openPromptObserver = NotificationCenter.default.publisher(for: .openConductorWithPrompt)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] notification in
+                guard let self,
+                      let prompt = notification.object as? String,
+                      !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    return
+                }
+                self.openSurface(.chat, in: .primary)
+                self.currentInput = prompt
+            }
     }
 
     func loadInitialData() {
         loadWorkspaceLayout()
         primarySurface = .dashboard
         detachedSurfaces.remove(.dashboard)
-        if secondarySurface == nil {
-            secondarySurface = .calendar
-        }
+        secondarySurface = nil
         loadProjects()
         loadRecentMessages()
         loadOpenTodos()
         checkPermissions()
-        Task { await loadTodayData() }
+        promptForPermissionsIfNeeded()
+        Task {
+            await loadTodayData()
+            await refreshMailStatus()
+        }
     }
 
     func loadProjects() {
@@ -107,12 +136,25 @@ final class AppState: ObservableObject {
     }
 
     func checkPermissions() {
-        hasCalendarAccess = EventKitManager.shared.calendarAuthorizationStatus() == .fullAccess
-        hasRemindersAccess = EventKitManager.shared.remindersAuthorizationStatus() == .fullAccess
+        refreshPermissionFlags()
+        if hasCalendarAccess && hasRemindersAccess {
+            showPermissionsPrompt = false
+        }
         Task {
             isCliAvailable = await ClaudeService.shared.checkCLIAvailable()
             showSetup = !isCliAvailable
+            await refreshMailStatus()
         }
+    }
+
+    func promptForPermissionsIfNeeded() {
+        refreshPermissionFlags()
+        showPermissionsPrompt = !hasCalendarAccess || !hasRemindersAccess
+    }
+
+    private func refreshPermissionFlags() {
+        hasCalendarAccess = EventKitManager.shared.calendarAuthorizationStatus() == .fullAccess
+        hasRemindersAccess = EventKitManager.shared.remindersAuthorizationStatus() == .fullAccess
     }
 
     func loadTodayData() async {
@@ -125,6 +167,11 @@ final class AppState: ObservableObject {
             guard let due = todo.dueDate else { return false }
             return due >= today && due < tomorrow
         }
+    }
+
+    func refreshMailStatus() async {
+        mailConnectionStatus = MailService.shared.connectionStatus()
+        unreadEmailCount = await MailService.shared.getUnreadCount()
     }
 
     func loadOpenTodos() {
@@ -183,27 +230,29 @@ final class AppState: ObservableObject {
             }
             primarySurface = surface
         case .secondary:
-            if primarySurface == surface {
-                return
+            if primarySurface != surface {
+                detachSurface(surface)
             }
-            secondarySurface = surface
+            return
         }
 
         persistWorkspaceLayout()
     }
 
     func toggleSecondaryPane(default surface: WorkspaceSurface = .calendar) {
-        if secondarySurface != nil {
-            secondarySurface = nil
+        let target = primarySurface == surface ? .tasks : surface
+        if detachedSurfaces.contains(target) {
+            redockSurface(target, to: .primary)
         } else {
-            secondarySurface = primarySurface == surface ? .tasks : surface
+            detachSurface(target)
         }
-        ensureValidWorkspace()
-        persistWorkspaceLayout()
     }
 
     func clearSecondaryPane() {
-        secondarySurface = nil
+        if let surface = secondarySurface {
+            secondarySurface = nil
+            MainWindowController.shared.closeDetachedSurfaceWindow(for: surface)
+        }
         persistWorkspaceLayout()
     }
 
@@ -288,6 +337,7 @@ final class AppState: ObservableObject {
         isLoading = true
         currentInput = ""
         pendingReceipts = []
+        pendingVisualCards = []
 
         // Save user message
         let userMsg = try? messageRepo.saveMessage(role: "user", content: trimmed, sessionId: currentSessionId)
@@ -332,6 +382,10 @@ final class AppState: ObservableObject {
                     meta.model = response.model
                     meta.toolCallNames = response.toolCallNames ?? []
 
+                    // Attach visual cards produced by tools in this run.
+                    meta.uiElements.append(contentsOf: pendingVisualCards)
+                    pendingVisualCards = []
+
                     // Attach any pending receipts as UI elements
                     for receipt in pendingReceipts {
                         meta.uiElements.append(.operationReceipt(receipt))
@@ -347,6 +401,8 @@ final class AppState: ObservableObject {
                 loadProjects()
                 await loadTodayData()
             } catch {
+                pendingReceipts = []
+                pendingVisualCards = []
                 let errorMsg = try? messageRepo.saveMessage(
                     role: "system",
                     content: "Error: \(error.localizedDescription)",
@@ -483,11 +539,7 @@ final class AppState: ObservableObject {
 
         case .viewTodo(let todoId):
             selectTodo(todoId)
-            if secondarySurface == nil {
-                openSurface(.tasks, in: .secondary)
-            } else {
-                openSurface(.tasks)
-            }
+            openSurface(.tasks)
 
         case .dismissCard(let cardId):
             for (msgId, var meta) in messageMetadata {

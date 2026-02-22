@@ -25,38 +25,15 @@ struct WorkspacePaneView: View {
             Spacer()
 
             if isDetached {
-                Button("Dock Left") {
+                Button("Dock to Main") {
                     appState.redockSurface(surface, to: .primary)
-                }
-                .buttonStyle(.borderless)
-                .controlSize(.small)
-
-                Button("Dock Right") {
-                    appState.redockSurface(surface, to: .secondary)
                 }
                 .buttonStyle(.borderless)
                 .controlSize(.small)
             } else {
                 Menu {
-                    if role != .primary {
-                        Button("Move to Left Pane") {
-                            appState.openSurface(surface, in: .primary)
-                        }
-                    }
-                    if role != .secondary {
-                        Button("Move to Right Pane") {
-                            appState.openSurface(surface, in: .secondary)
-                        }
-                    }
-                    Divider()
                     Button("Open in Separate Window") {
                         appState.detachSurface(surface)
-                    }
-                    if showsCloseButton {
-                        Divider()
-                        Button("Close Right Pane") {
-                            appState.clearSecondaryPane()
-                        }
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")
@@ -71,16 +48,6 @@ struct WorkspacePaneView: View {
                 }
                 .buttonStyle(.plain)
                 .help("Open in Separate Window")
-
-                if showsCloseButton {
-                    Button {
-                        appState.clearSecondaryPane()
-                    } label: {
-                        Image(systemName: "xmark.circle")
-                    }
-                    .buttonStyle(.plain)
-                    .help("Close Right Pane")
-                }
             }
         }
         .padding(.horizontal, 12)
@@ -109,6 +76,8 @@ struct WorkspaceSurfaceContentView: View {
                 .background(Color(nsColor: .textBackgroundColor))
             case .projects:
                 ProjectsWorkspaceView()
+            case .email:
+                EmailWorkspaceView()
             }
         }
     }

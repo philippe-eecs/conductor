@@ -6,6 +6,7 @@ enum WorkspaceSurface: String, CaseIterable, Codable, Identifiable {
     case tasks
     case chat
     case projects
+    case email
 
     var id: String { rawValue }
 
@@ -16,6 +17,7 @@ enum WorkspaceSurface: String, CaseIterable, Codable, Identifiable {
         case .tasks: return "Tasks"
         case .chat: return "Chat"
         case .projects: return "Projects"
+        case .email: return "Email"
         }
     }
 
@@ -26,11 +28,12 @@ enum WorkspaceSurface: String, CaseIterable, Codable, Identifiable {
         case .tasks: return "checklist"
         case .chat: return "bubble.left.and.bubble.right"
         case .projects: return "folder"
+        case .email: return "envelope"
         }
     }
 
     static var navigationOrder: [WorkspaceSurface] {
-        [.dashboard, .calendar, .tasks, .chat, .projects]
+        [.dashboard, .calendar, .tasks, .chat, .projects, .email]
     }
 }
 

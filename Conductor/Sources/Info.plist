@@ -34,6 +34,8 @@
 	<string>Conductor can add reminders, but needs full access to read your existing reminders.</string>
 	<key>NSRemindersUsageDescription</key>
 	<string>Conductor needs access to your reminders to help you track tasks and create new reminders.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Conductor uses your contacts to find recipient emails and schedule meetings quickly.</string>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Conductor needs Apple Events access to read from Mail and create draft email replies for your review.</string>
     <key>NSSpeechRecognitionUsageDescription</key>

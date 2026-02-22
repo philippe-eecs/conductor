@@ -66,6 +66,7 @@ actor BlinkEngine {
         let runningAgents = (try? blinkRepo.runningAgentRuns()) ?? []
         let recentBlinks = (try? blinkRepo.recentBlinks(limit: 3)) ?? []
         let unreadEmails = await MailService.shared.getUnreadCount()
+        let recentEmails = await MailService.shared.getRecentEmails(hoursBack: 12)
 
         // Build prompt
         let prompt = BlinkPromptBuilder.build(
@@ -73,7 +74,8 @@ actor BlinkEngine {
             openTodos: openTodos,
             runningAgents: runningAgents,
             recentBlinks: recentBlinks,
-            unreadEmailCount: unreadEmails
+            unreadEmailCount: unreadEmails,
+            recentEmails: recentEmails
         )
 
         do {
@@ -103,16 +105,26 @@ actor BlinkEngine {
             case .notify:
                 if let title = decision.notificationTitle, let body = decision.notificationBody {
                     Log.blink.info("Blink: notify — \(title, privacy: .public)")
-                    await NotificationManager.shared.sendNotification(title: title, body: body)
+                    await NotificationManager.shared.sendNotification(
+                        title: title,
+                        body: body,
+                        suggestedPrompt: decision.suggestedPrompt
+                    )
                 }
 
             case .agent:
                 if let todoId = decision.agentTodoId, let prompt = decision.agentPrompt {
                     Log.blink.info("Blink: agent dispatch for TODO \(todoId)")
                     let run = try blinkRepo.createAgentRun(todoId: todoId, prompt: prompt)
-                    Task.detached {
-                        await AgentDispatcher.shared.execute(runId: run.id!, todoId: todoId, prompt: prompt)
+                    if let runId = run.id {
+                        Task.detached {
+                            await AgentDispatcher.shared.execute(runId: runId, todoId: todoId, prompt: prompt)
+                        }
+                    } else {
+                        Log.blink.error("Blink: failed to dispatch agent (missing run id)")
                     }
+                } else {
+                    Log.blink.warning("Blink: agent decision missing todo_id or prompt")
                 }
             }
 
@@ -138,6 +150,7 @@ actor BlinkEngine {
         let decision: BlinkDecision
         let notificationTitle: String?
         let notificationBody: String?
+        let suggestedPrompt: String?
         let agentTodoId: Int64?
         let agentPrompt: String?
         let reasoning: String?
@@ -168,6 +181,7 @@ actor BlinkEngine {
             decision: .silent,
             notificationTitle: nil,
             notificationBody: nil,
+            suggestedPrompt: nil,
             agentTodoId: nil,
             agentPrompt: nil,
             reasoning: "Parse failure: \(cleaned.prefix(200))"
@@ -187,6 +201,7 @@ actor BlinkEngine {
             decision: decision,
             notificationTitle: json["notification_title"] as? String,
             notificationBody: json["notification_body"] as? String,
+            suggestedPrompt: json["suggested_prompt"] as? String,
             agentTodoId: json["agent_todo_id"] as? Int64,
             agentPrompt: json["agent_prompt"] as? String,
             reasoning: json["reasoning"] as? String

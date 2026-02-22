@@ -86,7 +86,8 @@ final class BlinkEngineTests: XCTestCase {
             openTodos: [],
             runningAgents: [],
             recentBlinks: [],
-            unreadEmailCount: 0
+            unreadEmailCount: 0,
+            recentEmails: []
         )
         XCTAssertTrue(prompt.contains("silent"))
         XCTAssertTrue(prompt.contains("notify"))

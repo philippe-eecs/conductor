@@ -8,6 +8,16 @@ private enum CalendarScope: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+private struct WeekEventLayout: Identifiable {
+    let id: String
+    let event: EventKitManager.CalendarEvent
+    let dayIndex: Int
+    let startMinute: Int
+    let endMinute: Int
+    let columnIndex: Int
+    let columnCount: Int
+}
+
 struct CalendarWorkspaceView: View {
     @EnvironmentObject var appState: AppState
 
@@ -17,6 +27,63 @@ struct CalendarWorkspaceView: View {
     @State private var scopedEvents: [EventKitManager.CalendarEvent] = []
 
     private var calendar: Calendar { Calendar.current }
+    private var weekStartDate: Date { weekStart(for: selectedDate) }
+    private var weekDatesForSelection: [Date] { weekDates(around: selectedDate) }
+
+    private var weekTimedEvents: [EventKitManager.CalendarEvent] {
+        let weekEnd = calendar.date(byAdding: .day, value: 7, to: weekStartDate) ?? weekStartDate
+        return scopedEvents
+            .filter { !$0.isAllDay }
+            .filter { event in
+                let day = calendar.startOfDay(for: event.startDate)
+                return day >= weekStartDate && day < weekEnd
+            }
+            .sorted { lhs, rhs in
+                if lhs.startDate == rhs.startDate { return lhs.endDate < rhs.endDate }
+                return lhs.startDate < rhs.startDate
+            }
+    }
+
+    private var weekLayouts: [WeekEventLayout] {
+        buildWeekLayouts(events: weekTimedEvents)
+    }
+
+    private var weekAllDayEventsByDay: [[EventKitManager.CalendarEvent]] {
+        weekDatesForSelection.map { day in
+            scopedEvents
+                .filter { $0.isAllDay && calendar.isDate($0.startDate, inSameDayAs: day) }
+                .sorted { $0.title < $1.title }
+        }
+    }
+
+    private var dueDeliverablesThisWeek: [Todo] {
+        let weekEnd = calendar.date(byAdding: .day, value: 7, to: weekStartDate) ?? weekStartDate
+        return appState.openTodos
+            .filter { todo in
+                guard let due = todo.dueDate else { return false }
+                return due >= weekStartDate && due < weekEnd
+            }
+            .sorted { lhs, rhs in
+                let lhsDue = lhs.dueDate ?? .distantFuture
+                let rhsDue = rhs.dueDate ?? .distantFuture
+                if lhsDue == rhsDue { return lhs.priority > rhs.priority }
+                return lhsDue < rhsDue
+            }
+    }
+
+    private var timelineStartHour: Int {
+        let minHour = weekTimedEvents.map { calendar.component(.hour, from: $0.startDate) }.min() ?? 8
+        return max(0, min(8, minHour - 1))
+    }
+
+    private var timelineEndHour: Int {
+        let maxHour = weekTimedEvents.map { calendar.component(.hour, from: $0.endDate) + 1 }.max() ?? 18
+        return min(24, max(18, maxHour + 1))
+    }
+
+    private var timelineHours: [Int] {
+        Array(timelineStartHour..<timelineEndHour)
+    }
 
     var body: some View {
         Group {
@@ -124,7 +191,9 @@ struct CalendarWorkspaceView: View {
                     if scope == .month {
                         monthSummary
                     }
-                    agendaList(events: eventsForAgenda)
+                    if scope != .week {
+                        agendaList(events: eventsForAgenda)
+                    }
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
@@ -133,38 +202,147 @@ struct CalendarWorkspaceView: View {
     }
 
     private var weekGrid: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Week Overview")
+        let dayColumnWidth: CGFloat = 146
+        let hourLabelWidth: CGFloat = 54
+        let hourRowHeight: CGFloat = 54
+        let headerHeight: CGFloat = 54
+        let timelineHeight = CGFloat(max(timelineHours.count, 1)) * hourRowHeight
+        let gridWidth = hourLabelWidth + (dayColumnWidth * 7)
+
+        return VStack(alignment: .leading, spacing: 10) {
+            Text("Week Schedule")
                 .font(.subheadline.weight(.semibold))
 
-            ForEach(weekDates(around: selectedDate), id: \.self) { day in
-                let events = scopedEvents.filter { calendar.isDate($0.startDate, inSameDayAs: day) }
-                HStack(spacing: 10) {
-                    Text(SharedDateFormatters.shortDayDate.string(from: day))
-                        .font(.caption.weight(.medium))
-                        .frame(width: 88, alignment: .leading)
+            ScrollView([.horizontal, .vertical]) {
+                ZStack(alignment: .topLeading) {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color(nsColor: .textBackgroundColor))
+                        .frame(width: gridWidth, height: headerHeight + timelineHeight)
 
-                    Text("\(events.count) events")
-                        .font(.caption2)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.blue.opacity(0.14))
-                        .foregroundColor(.blue)
-                        .clipShape(Capsule())
+                    ForEach(weekDatesForSelection.indices, id: \.self) { dayIndex in
+                        let dayX = hourLabelWidth + CGFloat(dayIndex) * dayColumnWidth
+                        Rectangle()
+                            .fill(Color.secondary.opacity(0.12))
+                            .frame(width: 1, height: headerHeight + timelineHeight)
+                            .offset(x: dayX, y: 0)
 
-                    if let title = events.first?.title {
-                        Text(title)
-                            .font(.caption)
+                        Text(SharedDateFormatters.shortDayDate.string(from: weekDatesForSelection[dayIndex]))
+                            .font(.caption.weight(.semibold))
                             .foregroundColor(.secondary)
-                            .lineLimit(1)
-                    } else {
-                        Text("No events")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                            .frame(width: dayColumnWidth - 10, alignment: .leading)
+                            .offset(x: dayX + 8, y: 8)
+
+                        let allDay = weekAllDayEventsByDay[dayIndex]
+                        if !allDay.isEmpty {
+                            let chipTitle = allDay[0].title
+                            HStack(spacing: 4) {
+                                Text(chipTitle)
+                                    .lineLimit(1)
+                                if allDay.count > 1 {
+                                    Text("+\(allDay.count - 1)")
+                                }
+                            }
+                            .font(.system(size: 10, weight: .medium))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(Color.pink.opacity(0.15))
+                            .foregroundColor(.pink)
+                            .clipShape(Capsule())
+                            .frame(width: dayColumnWidth - 12, alignment: .leading)
+                            .offset(x: dayX + 6, y: 26)
+                        }
                     }
-                    Spacer()
+
+                    Rectangle()
+                        .fill(Color.secondary.opacity(0.12))
+                        .frame(width: gridWidth, height: 1)
+                        .offset(x: 0, y: headerHeight - 1)
+
+                    ForEach(Array(timelineHours.enumerated()), id: \.offset) { idx, hour in
+                        let y = headerHeight + CGFloat(idx) * hourRowHeight
+
+                        Rectangle()
+                            .fill(Color.secondary.opacity(0.1))
+                            .frame(width: gridWidth, height: 1)
+                            .offset(x: 0, y: y)
+
+                        Text(timeLabel(hour: hour))
+                            .font(.caption2.monospacedDigit())
+                            .foregroundColor(.secondary)
+                            .frame(width: hourLabelWidth - 8, alignment: .trailing)
+                            .offset(x: 0, y: y - 7)
+                    }
+
+                    ForEach(weekLayouts) { layout in
+                        let dayBaseX = hourLabelWidth + CGFloat(layout.dayIndex) * dayColumnWidth
+                        let columnWidth = dayColumnWidth / CGFloat(max(layout.columnCount, 1))
+                        let start = max(layout.startMinute, timelineStartHour * 60)
+                        let end = min(layout.endMinute, timelineEndHour * 60)
+                        if end > start {
+                            let y = headerHeight + (CGFloat(start - (timelineStartHour * 60)) / 60.0 * hourRowHeight)
+                            let eventHeight = max(18, CGFloat(end - start) / 60.0 * hourRowHeight)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(layout.event.title)
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .lineLimit(2)
+                                Text(SharedDateFormatters.shortTime.string(from: layout.event.startDate))
+                                    .font(.system(size: 9))
+                                    .opacity(0.8)
+                            }
+                            .foregroundColor(.blue)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 5)
+                            .frame(
+                                width: max(columnWidth - 6, 20),
+                                height: eventHeight,
+                                alignment: .topLeading
+                            )
+                            .background(Color.blue.opacity(0.16))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                    .stroke(Color.blue.opacity(0.4), lineWidth: 0.5)
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                            .offset(
+                                x: dayBaseX + CGFloat(layout.columnIndex) * columnWidth + 3,
+                                y: y
+                            )
+                        }
+                    }
                 }
-                .padding(.vertical, 2)
+                .frame(width: gridWidth, height: headerHeight + timelineHeight)
+                .padding(.bottom, 4)
+            }
+            .frame(minHeight: 360, maxHeight: 500)
+
+            if dueDeliverablesThisWeek.isEmpty {
+                Text("No deliverables due this week.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Deliverables Due")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.secondary)
+
+                    ForEach(dueDeliverablesThisWeek.prefix(8), id: \.id) { todo in
+                        HStack(spacing: 8) {
+                            Image(systemName: "circle.fill")
+                                .font(.system(size: 6))
+                                .foregroundColor(.orange)
+                            Text(todo.title)
+                                .font(.caption)
+                                .lineLimit(1)
+                            Spacer()
+                            if let due = todo.dueDate {
+                                Text(SharedDateFormatters.shortDayDate.string(from: due))
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                }
             }
         }
         .padding(10)
@@ -294,6 +472,71 @@ struct CalendarWorkspaceView: View {
     private func weekDates(around date: Date) -> [Date] {
         let start = weekStart(for: date)
         return (0..<7).compactMap { calendar.date(byAdding: .day, value: $0, to: start) }
+    }
+
+    private func timeLabel(hour: Int) -> String {
+        let components = DateComponents(hour: hour)
+        guard let date = calendar.date(from: components) else {
+            return "\(hour):00"
+        }
+        return SharedDateFormatters.shortTime.string(from: date)
+    }
+
+    private func buildWeekLayouts(events: [EventKitManager.CalendarEvent]) -> [WeekEventLayout] {
+        var layouts: [WeekEventLayout] = []
+
+        for (dayIndex, day) in weekDatesForSelection.enumerated() {
+            let dayEvents = events
+                .filter { calendar.isDate($0.startDate, inSameDayAs: day) }
+                .sorted {
+                    if $0.startDate == $1.startDate { return $0.endDate < $1.endDate }
+                    return $0.startDate < $1.startDate
+                }
+
+            guard !dayEvents.isEmpty else { continue }
+
+            var eventColumns: [(event: EventKitManager.CalendarEvent, column: Int)] = []
+            var activeColumnEnds: [Date] = []
+
+            for event in dayEvents {
+                let column = nextAvailableColumn(start: event.startDate, activeColumnEnds: activeColumnEnds)
+                if column < activeColumnEnds.count {
+                    activeColumnEnds[column] = event.endDate
+                } else {
+                    activeColumnEnds.append(event.endDate)
+                }
+                eventColumns.append((event: event, column: column))
+            }
+
+            let columnCount = max(activeColumnEnds.count, 1)
+            for item in eventColumns {
+                let startMinute = calendar.component(.hour, from: item.event.startDate) * 60
+                    + calendar.component(.minute, from: item.event.startDate)
+                let endMinute = calendar.component(.hour, from: item.event.endDate) * 60
+                    + calendar.component(.minute, from: item.event.endDate)
+
+                layouts.append(
+                    WeekEventLayout(
+                        id: item.event.id,
+                        event: item.event,
+                        dayIndex: dayIndex,
+                        startMinute: startMinute,
+                        endMinute: max(endMinute, startMinute + 15),
+                        columnIndex: item.column,
+                        columnCount: columnCount
+                    )
+                )
+            }
+        }
+
+        return layouts
+    }
+
+    private func nextAvailableColumn(start: Date, activeColumnEnds: [Date]) -> Int {
+        for (index, endDate) in activeColumnEnds.enumerated() where endDate <= start {
+            return index
+        }
+        return activeColumnEnds.count
     }
 
     private func monthTitle(for date: Date) -> String {

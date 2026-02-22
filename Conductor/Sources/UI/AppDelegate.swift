@@ -30,6 +30,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Load initial data and show window
         AppState.shared.loadInitialData()
+        let autoOpenMail = ((try? AppState.shared.prefRepo.getInt("mail_auto_open_on_launch", default: 0)) ?? 0) == 1
+        if autoOpenMail {
+            Task {
+                _ = await MailService.shared.connectToMailApp()
+                await AppState.shared.refreshMailStatus()
+            }
+        }
         MainWindowController.shared.showWindow(appState: AppState.shared)
         MainWindowController.shared.restoreDetachedWindows(appState: AppState.shared)
     }

@@ -59,6 +59,34 @@ struct SetupView: View {
                         }
                     }
                 }
+
+                HStack {
+                    let hasContacts = ContactsManager.shared.contactsAuthorizationStatus() == .authorized
+                    Image(systemName: hasContacts ? "checkmark.circle.fill" : "circle")
+                        .foregroundColor(hasContacts ? .green : .secondary)
+                    Text("Contacts Access")
+                    Spacer()
+                    if !hasContacts {
+                        Button("Grant") {
+                            Task { _ = await ContactsManager.shared.requestContactsAccess() }
+                        }
+                    }
+                }
+
+                HStack {
+                    Image(systemName: appState.mailConnectionStatus == .connected ? "checkmark.circle.fill" : "circle")
+                        .foregroundColor(appState.mailConnectionStatus == .connected ? .green : .secondary)
+                    Text("Mail Connection")
+                    Spacer()
+                    if appState.mailConnectionStatus != .connected {
+                        Button("Connect") {
+                            Task {
+                                _ = await MailService.shared.connectToMailApp()
+                                await appState.refreshMailStatus()
+                            }
+                        }
+                    }
+                }
             }
             .padding()
             .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .controlBackgroundColor)))
