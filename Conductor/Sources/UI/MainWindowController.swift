@@ -20,7 +20,6 @@ final class MainWindowController: ObservableObject {
         if let window = window {
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
-            appState.promptForPermissionsIfNeeded()
             return
         }
 
@@ -52,7 +51,6 @@ final class MainWindowController: ObservableObject {
 
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        appState.promptForPermissionsIfNeeded()
     }
 
     func hideWindow() {

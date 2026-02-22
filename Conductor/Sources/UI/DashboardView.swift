@@ -115,12 +115,35 @@ struct DashboardView: View {
             } else {
                 ForEach(upcomingTasks.prefix(6), id: \.id) { todo in
                     HStack(spacing: 8) {
-                        Image(systemName: "circle")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                        Text(todo.title)
-                            .font(.caption)
-                            .lineLimit(1)
+                        if let todoId = todo.id {
+                            Button {
+                                appState.toggleTodoCompletion(todoId)
+                            } label: {
+                                Image(systemName: todo.completed ? "checkmark.circle.fill" : "circle")
+                                    .font(.caption2)
+                                    .foregroundColor(todo.completed ? .green : .secondary)
+                            }
+                            .buttonStyle(.plain)
+
+                            Button {
+                                appState.selectTodo(todoId)
+                                appState.openSurface(.tasks, in: .primary)
+                            } label: {
+                                Text(todo.title)
+                                    .font(.caption)
+                                    .lineLimit(1)
+                                    .foregroundColor(.primary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .buttonStyle(.plain)
+                        } else {
+                            Image(systemName: "circle")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                            Text(todo.title)
+                                .font(.caption)
+                                .lineLimit(1)
+                        }
                         Spacer()
                         if let due = todo.dueDate {
                             Text(SharedDateFormatters.shortMonthDay.string(from: due))

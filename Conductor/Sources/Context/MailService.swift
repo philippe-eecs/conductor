@@ -12,12 +12,17 @@ final class MailService {
         case connected
     }
 
-    struct EmailSummary {
+    struct EmailSummary: Identifiable {
         let sender: String
         let subject: String
         let receivedDate: Date
         let isRead: Bool
         let mailbox: String
+
+        var id: String {
+            let timestamp = Int(receivedDate.timeIntervalSince1970)
+            return "\(mailbox)|\(sender)|\(subject)|\(timestamp)"
+        }
     }
 
     func isMailRunning() -> Bool {

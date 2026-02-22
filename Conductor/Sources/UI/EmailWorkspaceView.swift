@@ -81,7 +81,7 @@ struct EmailWorkspaceView: View {
                         .foregroundColor(.secondary)
                         .padding(.top, 12)
                 } else {
-                    ForEach(Array(recentEmails.enumerated()), id: \.offset) { _, email in
+                    ForEach(recentEmails) { email in
                         VStack(alignment: .leading, spacing: 6) {
                             HStack {
                                 Text(email.sender)

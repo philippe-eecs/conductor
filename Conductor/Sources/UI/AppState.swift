@@ -401,6 +401,8 @@ final class AppState: ObservableObject {
                 loadProjects()
                 await loadTodayData()
             } catch {
+                pendingReceipts = []
+                pendingVisualCards = []
                 let errorMsg = try? messageRepo.saveMessage(
                     role: "system",
                     content: "Error: \(error.localizedDescription)",

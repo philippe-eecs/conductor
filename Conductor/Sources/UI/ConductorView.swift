@@ -66,6 +66,24 @@ struct ConductorView: View {
                 .buttonStyle(.borderless)
                 .help("Open Email")
             }
+
+            Button {
+                appState.startNewConversation()
+                appState.openSurface(.chat, in: .primary)
+            } label: {
+                Label("New Chat", systemImage: "square.and.pencil")
+                    .font(.caption)
+            }
+            .buttonStyle(.borderless)
+
+            Button {
+                appState.showSettings = true
+            } label: {
+                Image(systemName: "gearshape")
+                    .font(.caption)
+            }
+            .buttonStyle(.plain)
+            .help("Settings")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
